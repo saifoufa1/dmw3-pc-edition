@@ -8,9 +8,58 @@
 
 namespace dw3 {
 
-void uploadModel(const Model& m, ModelGpu& gpu) {
+namespace {
+void toHsv(float r, float g, float b, float& h, float& s, float& v) {
+    const float mx = std::max(r, std::max(g, b)), mn = std::min(r, std::min(g, b)), d = mx - mn;
+    v = mx;
+    s = mx > 0 ? d / mx : 0;
+    if (d <= 1e-5f) { h = 0; return; }
+    if (mx == r) h = 60.f * std::fmod((g - b) / d + 6.f, 6.f);
+    else if (mx == g) h = 60.f * ((b - r) / d + 2.f);
+    else h = 60.f * ((r - g) / d + 4.f);
+}
+void fromHsv(float h, float s, float v, float& r, float& g, float& b) {
+    const float c = v * s, x = c * (1 - std::abs(std::fmod(h / 60.f, 2.f) - 1)), m = v - c;
+    const int i = int(h / 60.f) % 6;
+    const float rr[6] = {c, x, 0, 0, x, c}, gg[6] = {x, c, c, x, 0, 0}, bb[6] = {0, 0, x, c, c, x};
+    r = rr[i] + m;
+    g = gg[i] + m;
+    b = bb[i] + m;
+}
+}  // namespace
+
+void recolorImage(Image& img, Recolor rc) {
+    if (rc == Recolor::None) return;
+    for (uint32_t& p : img.px) {
+        if ((p >> 24) == 0) continue;
+        float r = float(p & 255) / 255.f, g = float((p >> 8) & 255) / 255.f, b = float((p >> 16) & 255) / 255.f;
+        float h, s, v;
+        toHsv(r, g, b, h, s, v);
+        const bool skin = s > 0.25f && h >= 15.f && h <= 72.f;   // Agumon's yellow / orange hide
+        const bool eye = s > 0.25f && h > 80.f && h < 170.f;     // green eyes
+        if (rc == Recolor::Black) {
+            if (skin) {  // charcoal grey, keeping the original shading
+                r = g = 0.10f + 0.42f * v;
+                b = 0.13f + 0.45f * v;
+            } else if (eye) {
+                fromHsv(42.f, std::max(0.6f, s), std::max(0.7f, v), r, g, b);  // yellow eyes
+            }
+        } else if (rc == Recolor::Blue) {
+            if (skin) fromHsv(222.f, std::min(1.f, s * 0.8f + 0.12f), std::min(1.f, v * 0.92f), r, g, b);
+            else if (eye) fromHsv(0.f, std::max(0.6f, s), std::max(0.7f, v), r, g, b);  // red eyes
+        }
+        p = rgba(uint8_t(std::clamp(r, 0.f, 1.f) * 255), uint8_t(std::clamp(g, 0.f, 1.f) * 255),
+                 uint8_t(std::clamp(b, 0.f, 1.f) * 255), uint8_t(p >> 24));
+    }
+}
+
+void uploadModel(const Model& m, ModelGpu& gpu, Recolor recolor) {
     destroyModel(gpu);
-    for (size_t c = 0; c < m.cluts.size(); ++c) gpu.tex.push_back(gfx::upload(m.textureFor(c)));
+    for (size_t c = 0; c < m.cluts.size(); ++c) {
+        Image img = m.textureFor(c);
+        recolorImage(img, recolor);
+        gpu.tex.push_back(gfx::upload(img));
+    }
 }
 
 void destroyModel(ModelGpu& gpu) {
@@ -162,9 +211,15 @@ std::shared_ptr<GameModel> ModelCache::get(const std::string& id, std::string* e
     // "M005GREY" -> DAT/MODEL, "EFFECT/MEFT0331" -> DAT/EFFECT.
     std::filesystem::path dir = root_ / "DAT" / "MODEL";
     std::string prefix = id;
-    if (auto slash = id.find('/'); slash != std::string::npos) {
-        dir = root_ / "DAT" / id.substr(0, slash);
-        prefix = id.substr(slash + 1);
+    Recolor recolor = Recolor::None;
+    if (auto colon = prefix.find(':'); colon != std::string::npos) {
+        const std::string rc = prefix.substr(colon + 1);
+        recolor = rc == "black" ? Recolor::Black : rc == "blue" ? Recolor::Blue : Recolor::None;
+        prefix = prefix.substr(0, colon);
+    }
+    if (auto slash = prefix.find('/'); slash != std::string::npos) {
+        dir = root_ / "DAT" / prefix.substr(0, slash);
+        prefix = prefix.substr(slash + 1);
     }
     std::filesystem::path file;
     std::error_code ec;
@@ -184,7 +239,7 @@ std::shared_ptr<GameModel> ModelCache::get(const std::string& id, std::string* e
         return nullptr;
     }
     gm->file = file.filename().string();
-    uploadModel(gm->model, gm->gpu);
+    uploadModel(gm->model, gm->gpu, recolor);
     cache_[id] = gm;
     return gm;
 }

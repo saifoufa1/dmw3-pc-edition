@@ -1,10 +1,14 @@
 // Real-time battle (Digimon World 1 spirit, direct control): the partner moves freely,
-// has 3 attack buttons + guard, and digivolves when the DV gauge is full.
+// has 3 attack buttons + guard, and digivolves when the DV gauge is full. A digivolved partner
+// keeps its form for the rest of the battle (hold the digivolve button to go back to Rookie).
+// The fight happens right on the field map where the encounter started.
 //
 // The partner is drawn with the original DW3 3D battle model of its current form
 // (Agumon -> Greymon -> MetalGreymon -> WarGreymon), using that form's own animation clips,
 // so every form moves and attacks differently. Digivolution plays a full sequence:
 // charge, white silhouette, morph to the new size, flash, the new form's roar.
+// Enemies use their own battle model too when one exists (see kEnemyModels in battle.cpp),
+// falling back to the field sprite.
 #pragma once
 #include <memory>
 #include <string>
@@ -59,7 +63,7 @@ private:
         std::string name;
         int level = 1;
         float hp = 1, maxHp = 1, mp = 0, maxMp = 0, power = 1;
-        int evo = 0, evoTimer = 0;
+        int evo = 0;
         float dv = 0;  // digivolve gauge 0..100
         int flash = 0, invuln = 0, stun = 0;
         float kbx = 0, kby = 0;
@@ -113,7 +117,7 @@ private:
     void hit(Fighter& target, Fighter& attacker, float dmg, float fromX, float fromY);
     void fireShot(const Fighter& from, const Fighter& to, float dmg, float speed, float r, float angleOffset, uint32_t color, int owner);
     void burst(float x, float y, uint32_t color, int n, float speed);
-    void attachFx(Shot& s, const FormAttack& atk);
+    void attachFx(Shot& s, const char* effect, float effectScale);
     void drawShotFx(const Shot& s, float camX, float camY);
     void setEvo(int evo);
     void setClip(Fighter& f, int clip, float speed, bool restart = false);
@@ -124,6 +128,7 @@ private:
     std::string formName() const;
     std::string formNameOf(int evo) const;
     void clampArena(Fighter& f);
+    float bodyRadius(const Fighter& f) const { return f.model ? f.heightPx * 0.3f : 10.f * f.scale; }
 
     SpriteCache& sprites_;
     ModelCache& models_;
@@ -142,6 +147,15 @@ private:
     bool done_ = false, won_ = false;
     float baseMaxHp_ = 120;
     std::string banner_;
+    // Enemy projectile look (its own technique effect when it has a model).
+    const char* foeEffect_ = nullptr;
+    float foeEffectScale_ = 0;
+    // HUD feedback: attack button glow (ticks left, per slot; negative = refused), move-name
+    // banner over the partner, and the hold-to-de-digivolve timer.
+    int btnFx_[3] = {0, 0, 0};
+    std::string moveName_;
+    int moveNameT_ = 0;
+    int revertHold_ = 0;
 };
 
 }  // namespace dw3

@@ -17,7 +17,12 @@ namespace dw3 {
 struct ModelGpu {
     std::vector<Texture> tex;  // one RGBA texture per CLUT
 };
-void uploadModel(const Model& m, ModelGpu& gpu);
+// Palette recolours: Digimon that reuse another Digimon's battle model with other colours.
+// DAT/MODEL has no file of its own for Black Agumon / Blue Agumon (field sprites P171BAGM /
+// P167SAGM), so they are Agumon's M003AGUM mesh and clips with a repainted texture.
+enum class Recolor { None, Black, Blue };
+void recolorImage(Image& img, Recolor r);
+void uploadModel(const Model& m, ModelGpu& gpu, Recolor recolor = Recolor::None);
 void destroyModel(ModelGpu& gpu);
 
 struct ModelView {
@@ -41,7 +46,7 @@ struct GameModel {
 };
 
 // Loads DAT/MODEL/<prefix>*.BIN once (prefix like "M005GREY"; "EFFECT/MEFT0331" loads from
-// DAT/EFFECT) and keeps it uploaded.
+// DAT/EFFECT) and keeps it uploaded. A ":black" / ":blue" suffix uploads a recoloured copy.
 class ModelCache {
 public:
     void setRoot(std::filesystem::path r) { root_ = std::move(r); }

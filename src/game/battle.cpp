@@ -8,10 +8,15 @@
 namespace dw3 {
 
 namespace {
-// Arena bounds in screen space (feet positions).
-constexpr float kArenaL = 22, kArenaR = 298, kArenaT = 112, kArenaB = 226;
-constexpr int kEvoDuration = 60 * 25;  // a digivolution lasts 25 s, then reverts to Rookie
+// Invisible arena bounds in screen space (feet positions). The bottom stays above the attack
+// button panel; the top keeps the fighter's head below the HP bars (see clampArena).
+constexpr float kArenaL = 22, kArenaR = 298, kArenaT = 112, kArenaB = 198;
+constexpr float kHudTop = 50;           // fighters' heads stay below this line
 constexpr float kRookieHeightPx = 40;  // on-screen height of a Rookie model; forms grow by EvoStage::scale
+constexpr int kRevertHold = 60;        // hold digivolve this many ticks to go back to Rookie
+
+// Attack button panel (virtual 320x240 coordinates).
+constexpr float kBtnX = 6, kBtnY = 203, kBtnW = 100, kBtnH = 26, kBtnGap = 4;
 
 // Clip slots shared by DW3 battle models (same index = same action for every Digimon).
 enum : int {
@@ -42,6 +47,23 @@ const FormDef kAgumonLine[kMaxEvo + 1] = {
       {"Dramon Killer", AtkFx::Dash, kClipStrike, 0, 26, 11, 1.2f, kWhite},
       {"Brave Tornado", AtkFx::Combo, kClipCombo3, 22, 90, 9, 1.2f, kBlue}}},
 };
+// Enemies drawn as 3D battle models. Keyed by the field sprite of the encounter.
+// DAT/MODEL has no Black Agumon or Blue Agumon file (no name contains BAGM/SAGM and none of the
+// 241 loadable models looks like them; the "2"/"9" files are recolours of other species), so they
+// reuse Agumon's M003AGUM mesh + clips with a repainted texture. Digmon (P123DIGM) has no battle
+// model in DAT/MODEL either -> it stays the field sprite.
+struct EnemyModelDef {
+    const char* sprite;
+    const char* model;
+    const char* effect;  // projectile effect model
+    float effectScale;
+};
+const EnemyModelDef kEnemyModels[] = {
+    {"P171BAGM", "M003AGUM:black", "EFFECT/MEFT0328", 0.0055f},  // Black Agumon
+    {"P167SAGM", "M003AGUM:blue", "EFFECT/MEFT0328", 0.0055f},   // Blue Agumon
+    {"P006AGUM", "M003AGUM", "EFFECT/MEFT0328", 0.0055f},        // Agumon
+};
+
 // Any other partner (sprite only): the original prototype moves.
 const FormDef kGenericForm = {"", "",
                               {{"Blast", AtkFx::Shot, kClipBreath, 6, 34, 10, 5, kOrange},
@@ -113,6 +135,25 @@ bool Battle::start(const BattleRequest& req, const Texture* backdrop, float bgX,
     foe_.scale = req.boss ? 1.6f : 1.15f;
     foe_.a.x = 235; foe_.a.y = 165; foe_.a.dir = W;
     foe_.aiTimer = 50;
+    foeEffect_ = nullptr;
+    foeEffectScale_ = 0;
+    for (const EnemyModelDef& d : kEnemyModels) {
+        if (req.enemySprite != d.sprite) continue;
+        foe_.model = models_.get(d.model);
+        if (!foe_.model) break;  // no model on disk: field sprite
+        // An enemy Rookie is exactly as tall as the partner Rookie; bosses are a bit bigger.
+        foe_.heightPx = kRookieHeightPx * (req.boss ? 1.3f : 1.f);
+        foe_.scale = foe_.heightPx / 35.f;  // keeps the AI's reach/spacing in proportion
+        foe_.yaw = yawFor(-1, -0.3f);
+        foeEffect_ = d.effect;
+        foeEffectScale_ = d.effectScale * foe_.heightPx / kRookieHeightPx;
+        setClip(foe_, kClipIdle, 0.6f, true);
+        break;
+    }
+    for (int& b : btnFx_) b = 0;
+    moveName_.clear();
+    moveNameT_ = 0;
+    revertHold_ = 0;
     return true;
 }
 
@@ -138,7 +179,6 @@ void Battle::setEvo(int evo) {
     if (next.hpBonus > prev.hpBonus) me_.hp += next.hpBonus - prev.hpBonus;  // growing heals the difference
     me_.hp = std::min(me_.hp, me_.maxHp);
     me_.maxMp = 60.f + 20.f * evo;
-    me_.evoTimer = evo > 0 ? kEvoDuration : 0;
 
     // The real model of this form (falls back to the tinted sprite when missing).
     const FormDef* f = form();
@@ -160,7 +200,8 @@ void Battle::setClip(Fighter& f, int clip, float speed, bool restart) {
 
 void Battle::clampArena(Fighter& f) {
     f.a.x = std::clamp(f.a.x, kArenaL, kArenaR);
-    f.a.y = std::clamp(f.a.y, kArenaT, kArenaB);
+    const float top = std::min(kArenaB, std::max(kArenaT, kHudTop + f.bodyH() * 0.95f));
+    f.a.y = std::clamp(f.a.y, top, kArenaB);
 }
 
 void Battle::burst(float x, float y, uint32_t color, int n, float speed) {
@@ -189,9 +230,9 @@ static bool isTravelTrack(const ModelTrack& t) {
     return false;
 }
 
-void Battle::attachFx(Shot& s, const FormAttack& atk) {
-    if (!atk.effect) return;
-    s.fx = models_.get(atk.effect);
+void Battle::attachFx(Shot& s, const char* effect, float effectScale) {
+    if (!effect) return;
+    s.fx = models_.get(effect);
     if (!s.fx) return;
     const Model& m = s.fx->model;
     // launch = key before the flight starts (the original charges in place until then: the shot
@@ -211,7 +252,7 @@ void Battle::attachFx(Shot& s, const FormAttack& atk) {
     }
     if (arrive <= 2) arrive = (!m.clips.empty() && m.clips[0].valid()) ? std::max(4, m.clips[0].length - 1) : 40;
     launch = std::min(launch, arrive - 2);
-    s.fxScale = atk.effectScale;
+    s.fxScale = effectScale;
     s.fxT = float(launch);
     s.fxLoopTo = float(arrive - 1);
     s.fxLoopFrom = std::max(float(launch), (float(launch) + s.fxLoopTo) * 0.5f);
@@ -239,6 +280,17 @@ void Battle::startAttack(Fighter& f, int slot, int duration) {
     f.actHit = false;
     f.hitsDone = 0;
     f.a.move = Move::Action;
+    if (&f == &foe_ && f.model) {
+        // The enemy's own clip, timed so its strike frame lands when the hit resolves
+        // (updateEnemy: 18 ticks of wind-up).
+        const Model& m = f.model->model;
+        const int clip = slot == 0 ? firstValid(m, {kClipBreath, kClipStrike}) : firstValid(m, {kClipStrike, kClipCombo2, kClipBreath});
+        float hitFrame = 18.f;
+        if (clipValid(m, clip))
+            for (const ClipSeg& sg : m.clips[size_t(clip)].segs)
+                if (!sg.blend) { hitFrame = float(sg.start) + float(sg.len) * 0.55f; break; }
+        setClip(f, clip, std::clamp(hitFrame / 18.f, 0.5f, 2.5f), true);
+    }
 }
 
 void Battle::startPlayerAttack(int slot) {
@@ -304,7 +356,7 @@ void Battle::resolvePlayerAttack() {
     const int elapsed = f.actTotal - f.actTimer;
     const float dx = foe_.a.x - f.a.x, dy = foe_.a.y - f.a.y, d = std::max(1.f, len(dx, dy));
     const float reach = (f.model ? 10.f + f.heightPx * 0.42f : 24.f * f.scale) * atk.size;
-    const float foeR = 10.f * foe_.scale;
+    const float foeR = bodyRadius(foe_);
 
     // Lunges: close the distance before the strike lands.
     const int nextHit = f.hitsDone < int(f.hitTicks.size()) ? f.hitTicks[size_t(f.hitsDone)] : -1;
@@ -320,18 +372,18 @@ void Battle::resolvePlayerAttack() {
         switch (atk.fx) {
             case AtkFx::Shot:
                 fireShot(f, foe_, atk.dmg * pw, 3.8f, atk.size * std::sqrt(f.scale), 0, atk.color, 0);
-                attachFx(shots_.back(), atk);
+                attachFx(shots_.back(), atk.effect, atk.effectScale);
                 break;
             case AtkFx::Orb:
                 fireShot(f, foe_, atk.dmg * pw, 2.8f, atk.size, 0, atk.color, 0);
-                attachFx(shots_.back(), atk);
+                attachFx(shots_.back(), atk.effect, atk.effectScale);
                 burst(f.cx(), f.cy() - f.bodyH() * 0.15f, atk.color, 12, 2.f);
                 break;
             case AtkFx::Spread: {
                 const int n = int(f.hitTicks.size());
                 const float off = n > 1 ? (float(k) - (n - 1) / 2.f) * 0.2f : 0.f;
                 fireShot(f, foe_, atk.dmg * pw, 3.4f, atk.size * std::sqrt(f.scale), off, atk.color, 0);
-                attachFx(shots_.back(), atk);
+                attachFx(shots_.back(), atk.effect, atk.effectScale);
                 break;
             }
             case AtkFx::Melee:
@@ -362,6 +414,8 @@ void Battle::startEvoSeq(int to) {
     me_.kbx = me_.kby = 0;
     shots_.clear();
     if (seq_.up) me_.dv = 0;
+    revertHold_ = -1;  // a held button must be released before it can de-digivolve
+    moveNameT_ = 0;
 }
 
 void Battle::updateEvoSeq() {
@@ -425,11 +479,16 @@ void Battle::updatePlayer(const Input& in) {
     Fighter& f = me_;
     for (int& c : f.cd) c = std::max(0, c - 1);
     f.mp = std::min(f.maxMp, f.mp + 0.07f);
-    if (f.evoTimer > 0 && --f.evoTimer == 0 && f.act < 0) {
-        startEvoSeq(0);  // the form runs out: de-digivolve back to Rookie
+    if (f.stun > 0) { --f.stun; return; }
+
+    // A digivolved form stays for the whole battle. Going back to Rookie is the player's
+    // choice: hold the digivolve button for a second (when it cannot digivolve further).
+    const bool canDigivolve = f.dv >= 100.f && f.evo < kMaxEvo;
+    if (!in.digivolve) revertHold_ = 0;
+    else if (revertHold_ >= 0 && f.evo > 0 && !canDigivolve && f.act < 0 && ++revertHold_ >= kRevertHold) {
+        startEvoSeq(0);
         return;
     }
-    if (f.stun > 0) { --f.stun; return; }
 
     // digivolve (each stage is a different, bigger model)
     if (in.digivolveP && f.dv >= 100.f && f.evo < kMaxEvo && f.act < 0) {
@@ -449,11 +508,16 @@ void Battle::updatePlayer(const Input& in) {
     const bool want[3] = {in.atk1P, in.atk2P, in.atk3P};
     for (int s = 0; s < 3; ++s) {
         const FormAttack& atk = form()->atk[s];
-        if (!want[s] || f.cd[s] > 0) continue;
+        if (!want[s]) continue;
+        if (f.cd[s] > 0) { btnFx_[s] = -14; continue; }  // still recharging: the button blinks red
         if (f.mp < atk.mp) {
+            btnFx_[s] = -14;
             popups_.push_back({f.cx(), f.a.y - f.bodyH() - 8.f, "No MP", 40, 0xffa0a0a0u});
             continue;
         }
+        btnFx_[s] = 26;  // the pressed button lights up
+        moveName_ = atk.name;
+        moveNameT_ = 75;
         f.mp -= atk.mp;
         f.cd[s] = atk.cooldown;
         f.a.dir = dirFromVector(foe_.a.x - f.a.x, foe_.a.y - f.a.y);  // auto-face target
@@ -492,9 +556,11 @@ void Battle::updateEnemy() {
                 burst(e.cx() + dx / std::max(1.f, d) * 14.f, e.cy(), rgba(255, 120, 120), 8, 2.f);
             } else {
                 int n = e.boss ? 3 : 1;
-                for (int i = 0; i < n; ++i)
+                for (int i = 0; i < n; ++i) {
                     fireShot(e, me_, 8.f * e.power, e.boss ? 2.9f : 2.5f, e.boss ? 6.f : 5.f, (i - (n - 1) / 2.f) * 0.3f,
                              e.boss ? rgba(200, 60, 255) : rgba(120, 80, 255), 1);
+                    attachFx(shots_.back(), foeEffect_, foeEffectScale_);
+                }
             }
         }
         if (--e.actTimer <= 0) { e.act = -1; e.a.move = Move::Idle; }
@@ -568,6 +634,8 @@ void Battle::update(const Input& in) {
     ++ticks_;
     if (shake_ > 0) --shake_;
     if (screenFlash_ > 0) --screenFlash_;
+    for (int& b : btnFx_) b += b > 0 ? -1 : b < 0 ? 1 : 0;
+    if (moveNameT_ > 0) --moveNameT_;
 
     if (seq_.active) {
         // The world holds its breath while the partner digivolves.
@@ -597,6 +665,7 @@ void Battle::update(const Input& in) {
                 if (won_) burst(foe_.cx(), foe_.cy(), rgba(255, 255, 200), 60, 3.f);
                 shots_.clear();
                 me_.act = foe_.act = -1;
+                if (!won_ && me_.evo > 0) startEvoSeq(0);  // knocked out: falls back to Rookie
             }
         } else {
             if (won_) foe_.deathFade = std::max(0.f, foe_.deathFade - 0.02f);
@@ -641,10 +710,6 @@ void Battle::drawFighter(Fighter& f, float camX, float camY) {
     if (!isMe && f.act >= 0 && f.actTimer > (f.act == 1 ? 8 : 12))  // telegraph wind-up in red
         tint = (ticks_ / 3) % 2 ? rgba(255, 120, 120) : 0xffffffffu;
 
-    if (f.evoTimer > 0 && !seq_.active) {  // digivolved aura, pulses faster as it runs out
-        float p = 0.5f + 0.5f * std::sin(ticks_ * (f.evoTimer < 300 ? 0.4f : 0.12f));
-        gfx::drawGlow(f.cx() - camX, f.cy() - camY, f.bodyH() * 0.75f, rgba(255, 200, 80, uint8_t(40 + 50 * p)));
-    }
     if (f.model) {
         drawGroundShadow(f.a.x - camX, f.a.y - camY, f.heightPx * 0.32f, f.heightPx * 0.1f, 0.45f * f.deathFade);
         ModelView v;
@@ -671,11 +736,16 @@ void Battle::render() {
     const float sx = shake_ > 0 ? float((ticks_ * 7) % 5 - 2) * (shake_ / 6.f) : 0.f;
     const float sy = shake_ > 0 ? float((ticks_ * 11) % 5 - 2) * (shake_ / 8.f) : 0.f;
     const float camX = -sx, camY = -sy;
+    // The fight happens right on the field map where the encounter started: the same view of
+    // the stage, only a light vignette (darker at the bottom so the button panel reads).
     if (backdrop_) gfx::drawTexture(*backdrop_, -bgX_ + sx, -bgY_ + sy);
-    gfx::fillRect(0, 0, kScreenW, kScreenH, 0x99000010u);
-    // arena floor glow
-    for (int i = 0; i < 5; ++i) gfx::drawGlow(40 + i * 60.f + sx, 175 + sy, 70, rgba(90, 120, 255, 26));
-    gfx::strokeRect(kArenaL - 8 + sx, kArenaT - 18 + sy, kArenaR - kArenaL + 16, kArenaB - kArenaT + 24, 0x40ffffffu);
+    for (int i = 0; i < 8; ++i) {
+        const float k = float(8 - i) / 8.f;
+        gfx::fillRect(0, float(i) * 3.f, kScreenW, 3.f, rgba(0, 0, 0, uint8_t(60 * k * k)));
+        gfx::fillRect(0, kScreenH - float(i + 1) * 5.f, kScreenW, 5.f, rgba(0, 0, 0, uint8_t(110 * k * k)));
+        gfx::fillRect(float(i) * 3.f, 0, 3.f, kScreenH, rgba(0, 0, 0, uint8_t(45 * k * k)));
+        gfx::fillRect(kScreenW - float(i + 1) * 3.f, 0, 3.f, kScreenH, rgba(0, 0, 0, uint8_t(45 * k * k)));
+    }
     if (darken_ > 0) gfx::fillRect(0, 0, kScreenW, kScreenH, rgba(0, 0, 8, uint8_t(255 * darken_)));
 
     // digivolution light pillar behind the partner
@@ -718,7 +788,6 @@ void Battle::render() {
     bool ready = me_.dv >= 100.f && me_.evo < kMaxEvo;
     uint32_t dvCol = ready ? ((ticks_ / 8) % 2 ? 0xff40ffffu : 0xff00a0ffu) : 0xff00c0ffu;
     bar(10, 37, 124, 4, me_.evo >= kMaxEvo ? 1.f : me_.dv / 100.f, dvCol);
-    if (me_.evoTimer > 0) bar(10, 43, 124, 1, float(me_.evoTimer) / kEvoDuration, 0xffffffffu);
     gfx::fillRect(184, 6, 130, 22, 0xa0100810u);
     bar(188, 20, 122, 5, foe_.hp / foe_.maxHp, foe_.boss ? 0xff3030ffu : 0xff3060f0u);
 
@@ -740,18 +809,88 @@ void Battle::renderHud(int ww, int wh) {
     std::snprintf(buf, sizeof buf, "%s%s  Lv%d", foe_.boss ? "BOSS " : "", foe_.name.c_str(), foe_.level);
     gfx::drawText(x, y + 10, buf, foe_.boss ? 0xff4040ffu : 0xffffffffu);
 
-    // attack bar (this form's own moves)
-    static const char* keys[3] = {"J", "K", "L"};
-    int cx = 10;
+    // ---- attack button panel: key, gamepad button, move name, MP cost, cooldown ----
+    static const char* kKeys[3] = {"J", "K", "L"};
+    static const char* kPad[3] = {"X", "B", "Y"};
+    static const uint32_t kPadCol[3] = {rgba(70, 150, 255), rgba(255, 80, 70), rgba(255, 205, 40)};
+    const int S = std::max(1, gfx::pixelScale());
+    const bool fighting = phase_ == Phase::Fight && !seq_.active;
     for (int s = 0; s < 3; ++s) {
         const FormAttack& atk = form()->atk[s];
-        bool can = me_.cd[s] == 0 && me_.mp >= atk.mp && !seq_.active;
-        std::snprintf(buf, sizeof buf, "[%s] %s (%dMP)", keys[s], atk.name, int(atk.mp));
-        gfx::drawText(cx, wh - 30, buf, can ? 0xffffffffu : 0xff707070u);
-        cx += int(std::strlen(buf) + 3) * gfx::kCharW;
+        const bool cooling = me_.cd[s] > 0, noMp = me_.mp < atk.mp;
+        const bool can = fighting && !cooling && !noMp && me_.act < 0;
+        const bool lit = btnFx_[s] > 0 || me_.act == s;
+        const bool refused = btnFx_[s] < 0;
+        int x0, y0, x1, y1;
+        const float bx = kBtnX + float(s) * (kBtnW + kBtnGap);
+        gfx::toWindow(bx, kBtnY, x0, y0);
+        gfx::toWindow(bx + kBtnW, kBtnY + kBtnH, x1, y1);
+        const int w = x1 - x0, h = y1 - y0;
+        const float pulse = 0.5f + 0.5f * std::sin(float(ticks_) * 0.5f);
+        // body
+        gfx::fillRect(float(x0), float(y0), float(w), float(h), can || lit ? rgba(14, 20, 40, 225) : rgba(26, 26, 30, 215));
+        if (lit) gfx::fillRect(float(x0), float(y0), float(w), float(h), (kPadCol[s] & 0x00ffffffu) | (uint32_t(70 + 70 * pulse) << 24));
+        // cooldown: a dark curtain over the part still recharging + a refill bar
+        if (cooling) {
+            const float k = float(me_.cd[s]) / float(std::max(1, atk.cooldown));
+            gfx::fillRect(float(x1) - float(w) * k, float(y0), float(w) * k, float(h), rgba(0, 0, 0, 120));
+            gfx::fillRect(float(x0), float(y1 - 2 * S), float(w) * (1.f - k), float(2 * S), (kPadCol[s] & 0x00ffffffu) | 0xc0000000u);
+        }
+        // border: bright when pressed, red blink when refused
+        const uint32_t border = lit ? rgba(255, 255, 255) : refused && (btnFx_[s] / 3) % 2 ? rgba(255, 60, 60)
+                                : can ? ((kPadCol[s] & 0x00ffffffu) | 0xc0000000u) : rgba(90, 90, 90, 200);
+        const int bw = lit || refused ? 2 * S : S;
+        gfx::fillRect(float(x0), float(y0), float(w), float(bw), border);
+        gfx::fillRect(float(x0), float(y1 - bw), float(w), float(bw), border);
+        gfx::fillRect(float(x0), float(y0), float(bw), float(h), border);
+        gfx::fillRect(float(x1 - bw), float(y0), float(bw), float(h), border);
+        // key badge: keyboard key on top, gamepad button below
+        const int pad = 3 * S, bs = h - 2 * pad;
+        const uint32_t badge = can || lit ? kPadCol[s] : rgba(80, 80, 80);
+        gfx::fillRect(float(x0 + pad), float(y0 + pad), float(bs), float(bs), (badge & 0x00ffffffu) | 0xe0000000u);
+        const int line1 = y0 + h / 2 - 2 * S, line2 = y0 + h - pad - 2 * S;
+        gfx::drawTextCentered(x0 + pad + bs / 2, line1, kKeys[s], can || lit ? rgba(10, 10, 20) : rgba(170, 170, 170));
+        std::snprintf(buf, sizeof buf, "(%s)", kPad[s]);
+        gfx::drawTextCentered(x0 + pad + bs / 2, line2, buf, can || lit ? rgba(10, 10, 20) : rgba(150, 150, 150));
+        // move name + cost
+        const int tx = x0 + pad * 2 + bs;
+        gfx::drawText(tx, line1, atk.name, can || lit ? 0xffffffffu : rgba(140, 140, 140));
+        if (atk.mp > 0) std::snprintf(buf, sizeof buf, "%d MP", int(atk.mp));
+        else std::snprintf(buf, sizeof buf, "free");
+        gfx::drawText(tx, line2, buf, noMp ? rgba(255, 90, 90) : can || lit ? rgba(150, 220, 255) : rgba(130, 130, 130));
+        if (cooling) {
+            std::snprintf(buf, sizeof buf, "%.1fs", float(me_.cd[s]) / 60.f);
+            gfx::drawText(x1 - pad - int(std::strlen(buf)) * gfx::kCharW, line2, buf, rgba(200, 200, 200));
+        }
     }
-    gfx::drawText(10, wh - 12, "[Space] Guard   [U] Digivolve   Move: WASD (Shift run)   Gamepad: X/B/Y attacks, LB guard, RB digivolve",
-                  0xffb0e0ffu);
+    {
+        int hx, hy;
+        gfx::toWindow(160, kBtnY + kBtnH + 3, hx, hy);
+        gfx::drawTextCentered(hx, hy + 11, me_.evo > 0 ? "Move WASD (Shift run)   Guard Space/LB   Digivolve U/RB   Hold U: back to Rookie"
+                                                     : "Move WASD (Shift run)   Guard Space/LB   Digivolve U/RB",
+                              0xffb0e0ffu);
+    }
+
+    // the move just used, as a short banner over the partner
+    if (moveNameT_ > 0 && !moveName_.empty()) {
+        const float vy = std::max(kHudTop - 4.f, me_.a.y - me_.bodyH() - 14.f);
+        gfx::toWindow(me_.cx(), vy, x, y);
+        const int tw = int(moveName_.size()) * gfx::kCharW + 16;
+        const uint8_t a = uint8_t(std::min(255, moveNameT_ * 12));
+        const int bx = std::clamp(x - tw / 2, 4, ww - tw - 4);
+        gfx::fillRect(float(bx), float(y - 15), float(tw), 20.f, rgba(0, 0, 0, uint8_t(a * 0.7f)));
+        gfx::fillRect(float(bx), float(y + 3), float(tw), 2.f, rgba(255, 200, 60, a));
+        gfx::drawText(bx + 8, y, moveName_.c_str(), rgba(255, 230, 120, a));
+    }
+    // holding U to go back to Rookie
+    if (revertHold_ > 0 && !seq_.active) {
+        gfx::toWindow(me_.cx() - 20, me_.a.y + 6, x, y);
+        int x2, y2;
+        gfx::toWindow(me_.cx() + 20, me_.a.y + 9, x2, y2);
+        gfx::fillRect(float(x), float(y), float(x2 - x), float(y2 - y), rgba(0, 0, 0, 180));
+        gfx::fillRect(float(x), float(y), float(x2 - x) * float(revertHold_) / kRevertHold, float(y2 - y), rgba(200, 220, 255));
+        gfx::drawTextCentered((x + x2) / 2, y2 + 14, "back to Rookie...", rgba(200, 220, 255));
+    }
 
     for (const auto& p : popups_) {
         gfx::toWindow(p.x, p.y, x, y);
@@ -780,6 +919,7 @@ void Battle::renderHud(int ww, int wh) {
         if (phase_ == Phase::Ending && phaseTimer_ < 100) gfx::drawTextCentered(x, y + 24, "[Space] continue", 0xffffffffu);
     }
     (void)ww;
+    (void)wh;
 }
 
 }  // namespace dw3
