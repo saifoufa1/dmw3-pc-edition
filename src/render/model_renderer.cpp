@@ -50,14 +50,19 @@ void drawModel(const Model& m, const ModelGpu& gpu, const Pose& pose, const Mode
     struct V { float x, y, z; };
     std::vector<V> pv;
     std::vector<V> nv;
-    // Pass 1: shaded + textured. Pass 2 (flash only): additive white.
-    for (int pass = 0; pass < (v.flash > 0.f ? 2 : 1); ++pass) {
+    // Pass 0: opaque prims. Pass 1: PS1 semi-transparent prims (additive fire etc.), no depth
+    // writes. Pass 2 (flash only): additive white over everything.
+    for (int pass = 0; pass < (v.flash > 0.f ? 3 : 2); ++pass) {
         if (pass == 1) {
+            glDepthMask(GL_FALSE);
+            glDisable(GL_ALPHA_TEST);
+        }
+        if (pass == 2) {
             glDisable(GL_TEXTURE_2D);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            glDepthMask(GL_FALSE);
+            glEnable(GL_ALPHA_TEST);
         }
-        int boundTex = -1;
+        int boundTex = -1, boundBlend = -1;
         for (size_t i = 0; i < m.nodes.size(); ++i) {
             if (m.nodes[i].mesh < 0) continue;
             const ModelMesh& mesh = m.meshes[size_t(m.nodes[i].mesh)];
@@ -82,7 +87,15 @@ void drawModel(const Model& m, const ModelGpu& gpu, const Pose& pose, const Mode
                 nv[k] = {rx / l, py / l, pz / l};
             }
             for (const ModelPrim& pr : mesh.prims) {
-                if (pass == 0 && !v.silhouette && int(pr.clut) != boundTex && pr.clut < gpu.tex.size()) {
+                const bool semi = pr.blend != 0 && !v.silhouette;
+                if ((pass == 0 && semi) || (pass == 1 && !semi)) continue;
+                if (pass == 1 && pr.blend != boundBlend) {
+                    boundBlend = pr.blend;
+                    if (pr.blend == 1) glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);       // average
+                    else if (pr.blend == 3) glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR);       // subtract (approx.)
+                    else glBlendFunc(GL_SRC_ALPHA, GL_ONE);                                      // add / add 1/4
+                }
+                if (pass < 2 && !v.silhouette && int(pr.clut) != boundTex && pr.clut < gpu.tex.size()) {
                     glBindTexture(GL_TEXTURE_2D, gpu.tex[pr.clut].id);
                     boundTex = pr.clut;
                 }
@@ -91,7 +104,7 @@ void drawModel(const Model& m, const ModelGpu& gpu, const Pose& pose, const Mode
                 for (int t = 0; t < (pr.count == 4 ? 2 : 1); ++t)
                     for (int c = 0; c < 3; ++c) {
                         const int k = kTri[t][c];
-                        if (pass == 1) {
+                        if (pass == 2) {
                             glColor4f(1, 1, 1, v.flash * ta);
                         } else if (v.silhouette) {
                             glColor4f(tr, tg, tb, ta);
@@ -105,7 +118,9 @@ void drawModel(const Model& m, const ModelGpu& gpu, const Pose& pose, const Mode
                             }
                             float cr = li * (pr.lit ? 1.f : pr.r / 128.f), cg = li * (pr.lit ? 1.f : pr.g / 128.f),
                                   cb = li * (pr.lit ? 1.f : pr.b / 128.f);
-                            glColor4f(std::min(1.f, cr * tr), std::min(1.f, cg * tg), std::min(1.f, cb * tb), ta);
+                            float a = ta;
+                            if (pass == 1) a *= pr.blend == 1 ? 0.5f : pr.blend == 4 ? 0.25f : 1.f;
+                            glColor4f(std::min(1.f, cr * tr), std::min(1.f, cg * tg), std::min(1.f, cb * tb), a);
                             glTexCoord2f((pr.u[k] + 0.25f) / 256.f, (pr.t[k] + 0.25f) / 256.f);
                         }
                         const V& p = pv[pr.v[k]];
@@ -144,10 +159,17 @@ void drawGroundShadow(float cx, float cy, float rx, float ry, float alpha) {
 std::shared_ptr<GameModel> ModelCache::get(const std::string& id, std::string* err) {
     auto it = cache_.find(id);
     if (it != cache_.end()) return it->second;
+    // "M005GREY" -> DAT/MODEL, "EFFECT/MEFT0331" -> DAT/EFFECT.
+    std::filesystem::path dir = root_ / "DAT" / "MODEL";
+    std::string prefix = id;
+    if (auto slash = id.find('/'); slash != std::string::npos) {
+        dir = root_ / "DAT" / id.substr(0, slash);
+        prefix = id.substr(slash + 1);
+    }
     std::filesystem::path file;
     std::error_code ec;
-    for (auto& e : std::filesystem::directory_iterator(root_ / "DAT" / "MODEL", ec))
-        if (e.path().filename().string().rfind(id, 0) == 0) { file = e.path(); break; }
+    for (auto& e : std::filesystem::directory_iterator(dir, ec))
+        if (e.path().filename().string().rfind(prefix, 0) == 0) { file = e.path(); break; }
     Bytes b;
     if (file.empty() || !readFile(file, b)) {
         if (err) *err = "model not found: " + id;

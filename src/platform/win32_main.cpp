@@ -2,7 +2,7 @@
 // Command line:
 //   dmw3.exe [--data <dir>] [--stage S200]
 //   testing: [--screenshot out.bmp --frames N] [--autowalk] [--battle] [--boss <sprite>] [--autobattle]
-//            [--dv] (full digivolve gauge) [--form 0..3] (start digivolved) [--digivolve-at FRAME]
+//            [--dv] (full digivolve gauge) [--form 0..3] (start digivolved) [--digivolve-at FRAME] [--attack 1..3]
 #include <windows.h>
 #include <shellapi.h>
 #include <GL/gl.h>
@@ -147,6 +147,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     int shotFrames = 0;
     bool autowalk = false, autobattle = false;
     int digivolveAt = -1;  // testing: press digivolve on this frame
+    int autoAttack = 0;    // testing: use only this move (1..3) every 100 frames
     DebugOptions dbg;
     auto a = args();
     for (size_t i = 0; i < a.size(); ++i) {
@@ -157,6 +158,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--autowalk") autowalk = true;
         else if (a[i] == "--autobattle") autobattle = true;
         else if (a[i] == "--dv") dbg.fullDv = true;
+        else if (a[i] == "--attack" && i + 1 < a.size()) autoAttack = std::stoi(a[++i]);
         else if (a[i] == "--form" && i + 1 < a.size()) { dbg.startBattle = true; dbg.startForm = std::stoi(a[++i]); }
         else if (a[i] == "--digivolve-at" && i + 1 < a.size()) digivolveAt = std::stoi(a[++i]);
         else if (a[i] == "--battle") dbg.startBattle = true;
@@ -247,6 +249,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                     h.digivolve = frame % 30 == 0;
                 }
                 if (digivolveAt >= 0 && (frame == digivolveAt || frame == digivolveAt + 1)) h.digivolve = frame == digivolveAt;
+                if (autoAttack) {
+                    h.atk1 = autoAttack == 1 && frame % 100 == 80;
+                    h.atk2 = autoAttack == 2 && frame % 100 == 80;
+                    h.atk3 = autoAttack == 3 && frame % 100 == 80;
+                }
                 if (h.quit) g_running = false;
 
                 Input in;

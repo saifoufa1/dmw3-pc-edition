@@ -29,6 +29,8 @@ struct FormAttack {
     float dmg;       // per hit
     float size;      // projectile radius / melee reach factor
     uint32_t color;
+    const char* effect = nullptr;  // original effect model drawn as the projectile (DAT/EFFECT/MEFT####)
+    float effectScale = 0.f;   // effect model units -> screen pixels
 };
 
 struct FormDef {
@@ -81,7 +83,14 @@ private:
         float cx() const { return a.x; }
         float cy() const { return a.y - bodyH() * 0.5f; }
     };
-    struct Shot { float x, y, vx, vy, dmg, r; int owner, life; uint32_t color; };
+    struct Shot {
+        float x, y, vx, vy, dmg, r;
+        int owner, life;
+        uint32_t color;
+        // Original effect model (optional): played in place, oriented along the flight.
+        std::shared_ptr<GameModel> fx;
+        float fxScale = 0, fxT = 1, fxLoopFrom = 1, fxLoopTo = 1;
+    };
     struct Spark { float x, y, vx, vy; int life, max; float r; uint32_t color; };
     struct Popup { float x, y; std::string text; int life; uint32_t color; };
     // Digivolution / de-digivolution sequence.
@@ -104,6 +113,8 @@ private:
     void hit(Fighter& target, Fighter& attacker, float dmg, float fromX, float fromY);
     void fireShot(const Fighter& from, const Fighter& to, float dmg, float speed, float r, float angleOffset, uint32_t color, int owner);
     void burst(float x, float y, uint32_t color, int n, float speed);
+    void attachFx(Shot& s, const FormAttack& atk);
+    void drawShotFx(const Shot& s, float camX, float camY);
     void setEvo(int evo);
     void setClip(Fighter& f, int clip, float speed, bool restart = false);
     void animateModel(Fighter& f);

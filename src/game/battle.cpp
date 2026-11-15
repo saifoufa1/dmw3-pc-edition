@@ -26,19 +26,19 @@ constexpr uint32_t kOrange = 0xff2890ffu, kRed = 0xff1e5affu, kWhite = 0xfffffff
 // The Agumon line: each form has its own model, its own animations and its own way of fighting.
 const FormDef kAgumonLine[kMaxEvo + 1] = {
     {"Agumon", "M003AGUM",
-     {{"Pepper Breath", AtkFx::Shot, kClipBreath, 6, 34, 10, 5, kOrange},
+     {{"Pepper Breath", AtkFx::Shot, kClipBreath, 6, 34, 10, 5, kOrange, "EFFECT/MEFT0328", 0.0055f},
       {"Claw Attack", AtkFx::Melee, kClipStrike, 0, 22, 8, 1.0f, kWhite},
-      {"Spitfire Rush", AtkFx::Spread, kClipBreath, 16, 80, 6, 4, kRed}}},
+      {"Spitfire Rush", AtkFx::Spread, kClipBreath, 16, 80, 6, 4, kRed, "EFFECT/MEFT0328", 0.0042f}}},
     {"Greymon", "M005GREY",
-     {{"Nova Blast", AtkFx::Orb, kClipBreath, 8, 40, 12, 8, kOrange},
+     {{"Nova Blast", AtkFx::Orb, kClipBreath, 8, 40, 12, 8, kOrange, "EFFECT/MEFT0331", 0.014f},
       {"Horn Strike", AtkFx::Dash, kClipStrike, 0, 30, 9, 1.0f, kWhite},
       {"Great Antler", AtkFx::Combo, kClipCombo3, 18, 90, 7, 1.0f, kGold}}},
     {"MetalGreymon", "M012MTGR",
-     {{"Giga Destroyer", AtkFx::Spread, kClipBreath, 10, 46, 10, 6, kViolet},
+     {{"Giga Destroyer", AtkFx::Spread, kClipBreath, 10, 46, 10, 6, kViolet, "EFFECT/MEFT0367", 0.0085f},
       {"Trident Arm", AtkFx::Dash, kClipStrike, 0, 30, 10, 1.1f, kWhite},
       {"Mega Claw", AtkFx::Combo, kClipCombo3, 20, 90, 8, 1.1f, kGold}}},
     {"WarGreymon", "M213WGRE",
-     {{"Gaia Force", AtkFx::Orb, kClipBreath, 14, 60, 18, 12, kOrange},
+     {{"Gaia Force", AtkFx::Orb, kClipBreath, 14, 60, 18, 18, kOrange, "EFFECT/MEFT0090", 0.06f},
       {"Dramon Killer", AtkFx::Dash, kClipStrike, 0, 26, 11, 1.2f, kWhite},
       {"Brave Tornado", AtkFx::Combo, kClipCombo3, 22, 90, 9, 1.2f, kBlue}}},
 };
@@ -181,6 +181,57 @@ void Battle::fireShot(const Fighter& from, const Fighter& to, float dmg, float s
     shots_.push_back({fx, fy, std::cos(a) * speed, std::sin(a) * speed, dmg, r, owner, 150, color});
 }
 
+// Effect models fly themselves along local -z (thousands of units). The game moves the shot,
+// so nodes with such a travel track are pinned to the origin and the clip loops its in-flight part.
+static bool isTravelTrack(const ModelTrack& t) {
+    for (const ModelKey& k : t.pos)
+        if (k.t < 30000 && (std::abs(k.x) >= 2500 || std::abs(k.y) >= 2500 || std::abs(k.z) >= 2500)) return true;
+    return false;
+}
+
+void Battle::attachFx(Shot& s, const FormAttack& atk) {
+    if (!atk.effect) return;
+    s.fx = models_.get(atk.effect);
+    if (!s.fx) return;
+    const Model& m = s.fx->model;
+    // launch = key before the flight starts (the original charges in place until then: the shot
+    // already left the mouth here, so skip that part); arrive = frame where the flight ends.
+    int arrive = 0, launch = 1;
+    for (const ModelNode& n : m.nodes) {
+        const ModelTrack& t = m.tracks[size_t(n.track)];
+        if (!isTravelTrack(t)) continue;
+        for (size_t i = 0; i < t.pos.size(); ++i) {
+            const ModelKey& k = t.pos[i];
+            if (k.t < 30000 && (std::abs(k.z) >= 2500 || std::abs(k.x) >= 2500)) {
+                arrive = std::max(arrive, int(k.t));
+                if (i > 0) launch = std::max(launch, int(t.pos[i - 1].t));
+                break;
+            }
+        }
+    }
+    if (arrive <= 2) arrive = (!m.clips.empty() && m.clips[0].valid()) ? std::max(4, m.clips[0].length - 1) : 40;
+    launch = std::min(launch, arrive - 2);
+    s.fxScale = atk.effectScale;
+    s.fxT = float(launch);
+    s.fxLoopTo = float(arrive - 1);
+    s.fxLoopFrom = std::max(float(launch), (float(launch) + s.fxLoopTo) * 0.5f);
+}
+
+void Battle::drawShotFx(const Shot& s, float camX, float camY) {
+    const Model& m = s.fx->model;
+    Pose pose;
+    samplePose(m, s.fxT, pose);
+    for (size_t i = 0; i < m.nodes.size(); ++i)
+        if (isTravelTrack(m.tracks[size_t(m.nodes[i].track)])) pose[i].px = pose[i].py = pose[i].pz = 0;
+    ModelView v;
+    v.x = s.x - camX;
+    v.y = s.y - camY;
+    v.pxPerUnit = s.fxScale;
+    v.yaw = std::atan2(-s.vx, s.vy * 1.6f);  // the effect's forward (-z) along the flight
+    v.pitch = 0.32f;
+    drawModel(m, s.fx->gpu, pose, v);
+}
+
 void Battle::startAttack(Fighter& f, int slot, int duration) {
     f.act = slot;
     f.actTimer = duration;
@@ -269,15 +320,18 @@ void Battle::resolvePlayerAttack() {
         switch (atk.fx) {
             case AtkFx::Shot:
                 fireShot(f, foe_, atk.dmg * pw, 3.8f, atk.size * std::sqrt(f.scale), 0, atk.color, 0);
+                attachFx(shots_.back(), atk);
                 break;
             case AtkFx::Orb:
                 fireShot(f, foe_, atk.dmg * pw, 2.8f, atk.size, 0, atk.color, 0);
+                attachFx(shots_.back(), atk);
                 burst(f.cx(), f.cy() - f.bodyH() * 0.15f, atk.color, 12, 2.f);
                 break;
             case AtkFx::Spread: {
                 const int n = int(f.hitTicks.size());
                 const float off = n > 1 ? (float(k) - (n - 1) / 2.f) * 0.2f : 0.f;
                 fireShot(f, foe_, atk.dmg * pw, 3.4f, atk.size * std::sqrt(f.scale), off, atk.color, 0);
+                attachFx(shots_.back(), atk);
                 break;
             }
             case AtkFx::Melee:
@@ -556,7 +610,8 @@ void Battle::update(const Input& in) {
             s.x += s.vx;
             s.y += s.vy;
             --s.life;
-            if (frand(g_seed) < 0.5f) sparks_.push_back({s.x, s.y, -s.vx * 0.2f, -s.vy * 0.2f, 10, 10, s.r * 0.6f, s.color});
+            if (s.fx && (s.fxT += 1.f) > s.fxLoopTo) s.fxT = s.fxLoopFrom;  // keep the in-flight frames looping
+            if (frand(g_seed) < (s.fx ? 0.2f : 0.5f)) sparks_.push_back({s.x, s.y, -s.vx * 0.2f, -s.vy * 0.2f, 10, 10, s.r * 0.6f, s.color});
             Fighter& target = s.owner == 0 ? foe_ : me_;
             Fighter& source = s.owner == 0 ? me_ : foe_;
             const float tr = target.model ? target.heightPx * 0.3f : 9.f * target.scale;
@@ -641,6 +696,11 @@ void Battle::render() {
         gfx::drawGlow(me_.cx() + fx * 18 * me_.scale - camX, me_.cy() + fy * 8 - camY, 10 * me_.scale, rgba(255, 255, 255, 140));
     }
     for (const auto& s : shots_) {
+        if (s.fx) {  // the original technique model
+            gfx::drawGlow(s.x - camX, s.y - camY, s.r * 2.0f, (s.color & 0x00ffffffu) | 0x50000000u);
+            drawShotFx(s, camX, camY);
+            continue;
+        }
         gfx::drawGlow(s.x - camX, s.y - camY, s.r * 2.6f, (s.color & 0x00ffffffu) | 0xb0000000u);
         gfx::drawGlow(s.x - camX, s.y - camY, s.r * 1.1f, rgba(255, 255, 230, 230));
     }

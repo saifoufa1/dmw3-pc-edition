@@ -38,9 +38,37 @@ int16_t s16(ByteView v, size_t off) {
     return int16_t(u);
 }
 
+// Texture section: u32 headerSize, u32 pageOffsets..., 0; each page = RLEN -> TIM.
 bool isTexture(ByteView s) {
     uint32_t a = 0;
-    return s.u32(0, a) && a == 8 && s.has(8, 4) && isRlen(s, 8);
+    return s.u32(0, a) && (a == 8 || a == 12 || a == 16) && s.has(a, 4) && isRlen(s, a);
+}
+
+bool loadPages(ByteView s, std::vector<std::vector<uint16_t>>& pages, std::string& err) {
+    uint32_t h = 0;
+    s.u32(0, h);
+    std::vector<uint32_t> offs{h};
+    for (uint32_t o = 4; o + 4 <= h; o += 4) {
+        uint32_t v = 0;
+        s.u32(o, v);
+        if (v) offs.push_back(v);
+    }
+    for (uint32_t off : offs) {
+        Bytes tim;
+        if (!isRlen(s, off) || !decodeRlen(s, off, tim)) { err = "bad texture RLEN"; return false; }
+        ByteView tv(tim);
+        uint32_t magic, flags, blen;
+        uint16_t bw, bh;
+        if (!tv.u32(0, magic) || magic != 0x10 || !tv.u32(4, flags) || !tv.u32(8, blen) || !tv.u16(16, bw) ||
+            !tv.u16(18, bh) || bw != 64 || bh != 256 || !tv.has(20, size_t(bw) * bh * 2)) {
+            err = "unexpected texture layout";
+            return false;
+        }
+        std::vector<uint16_t> page(size_t(bw) * bh);
+        for (size_t i = 0; i < page.size(); ++i) tv.u16(20 + i * 2, page[i]);
+        pages.push_back(std::move(page));
+    }
+    return true;
 }
 
 bool readKeys(ByteView s, uint32_t a, uint32_t b, std::vector<ModelKey>& out) {
@@ -93,7 +121,7 @@ bool parseMesh(ByteView s, ModelMesh& m, Model& model, std::string& err) {
             if (!s.has(p, 7)) { err = "mesh header overrun"; return false; }
             ub = s.data[p];
             vb = s.data[p + 2];
-            std::array<int, 2> key{s.data[p + 3], s.data[p + 4]};
+            std::array<int, 3> key{s.data[p + 1], s.data[p + 3], s.data[p + 4]};
             auto it = std::find(model.cluts.begin(), model.cluts.end(), key);
             if (it == model.cluts.end()) { model.cluts.push_back(key); it = model.cluts.end() - 1; }
             clut = uint8_t(it - model.cluts.begin());
@@ -157,8 +185,14 @@ bool parseClips(ByteView s, std::vector<ModelClip>& clips) {
 Image Model::textureFor(size_t clutIndex) const {
     Image img;
     img.resize(kTexW, kTexH, 0);
-    if (clutIndex >= cluts.size() || vram.size() < 64 * 256) return img;
-    const int cx = cluts[clutIndex][0], cy = cluts[clutIndex][1];
+    if (clutIndex >= cluts.size()) return img;
+    const size_t page = size_t(cluts[clutIndex][0]);
+    if (page >= pages.size()) {  // no own texture: white, so effect shapes still show
+        std::fill(img.px.begin(), img.px.end(), rgba(255, 255, 255));
+        return img;
+    }
+    const auto& vram = pages[page];
+    const int cx = cluts[clutIndex][1], cy = cluts[clutIndex][2];
     uint32_t pal[16];
     for (int i = 0; i < 16; ++i) {
         size_t idx = size_t(cy & 255) * 64 + size_t(cx + i);
@@ -167,7 +201,7 @@ Image Model::textureFor(size_t clutIndex) const {
         pal[i] = w == 0 ? 0 : rgba(uint8_t(r | r >> 5), uint8_t(g | g >> 5), uint8_t(b | b >> 5));
     }
     for (int y = 0; y < kTexH; ++y)
-        for (int x = 0; x < kTexW; ++x) img.px[size_t(y) * kTexW + x] = pal[texel(x, y)];
+        for (int x = 0; x < kTexW; ++x) img.px[size_t(y) * kTexW + x] = pal[texel(page, x, y)];
     return img;
 }
 
@@ -185,26 +219,22 @@ bool loadModel(ByteView f, Model& out, std::string& err) {
         uint32_t t, c;
         if (!s.u32(0, t) || !s.u32(4, c) || t >= n || c == 0 || c > 128) continue;
         if (s.size != 8 + size_t(c) * 12 && s.size != 8 + size_t(c) * 12 - 4) continue;
-        if (!isTexture(S.s[t])) continue;
+        if (t != 0 && !isTexture(S.s[t])) continue;  // 0 = no own texture (effects)
+        bool rowsOk = true;
+        for (uint32_t k = 0; k < c && rowsOk; ++k) {
+            uint32_t par = 0, ms = 0, ts = 0;
+            s.u32(8 + k * 12, par); s.u32(12 + k * 12, ms);
+            if (!s.u32(16 + k * 12, ts)) ts = ms;
+            rowsOk = par <= c && ms < n && ts < n && ms != i && ts != i;
+        }
+        if (!rowsOk) continue;
         hier = int(i);
         texSec = t;
         count = c;
     }
     if (hier < 0) { err = "no hierarchy section (unsupported model layout)"; return false; }
 
-    // Texture: RLEN -> TIM (16-bit block holding 4bpp texels + CLUT rows).
-    Bytes tim;
-    if (!decodeRlen(S.s[texSec], 8, tim)) { err = "bad texture RLEN"; return false; }
-    ByteView tv(tim);
-    uint32_t magic, flags, blen;
-    uint16_t bw, bh;
-    if (!tv.u32(0, magic) || magic != 0x10 || !tv.u32(4, flags) || !tv.u32(8, blen) || !tv.u16(16, bw) ||
-        !tv.u16(18, bh) || bw != 64 || bh != 256 || !tv.has(20, size_t(bw) * bh * 2)) {
-        err = "unexpected texture layout";
-        return false;
-    }
-    out.vram.resize(size_t(bw) * bh);
-    for (size_t i = 0; i < out.vram.size(); ++i) tv.u16(20 + i * 2, out.vram[i]);
+    if (texSec != 0 && !loadPages(S.s[texSec], out.pages, err)) return false;
 
     ByteView hs = S.s[size_t(hier)];
     std::vector<std::array<uint32_t, 3>> rows(count);

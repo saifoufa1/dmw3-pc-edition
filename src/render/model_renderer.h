@@ -40,7 +40,8 @@ struct GameModel {
     ~GameModel() { destroyModel(gpu); }
 };
 
-// Loads DAT/MODEL/<prefix>*.BIN once (by prefix like "M005GREY" or "M005") and keeps it uploaded.
+// Loads DAT/MODEL/<prefix>*.BIN once (prefix like "M005GREY"; "EFFECT/MEFT0331" loads from
+// DAT/EFFECT) and keeps it uploaded.
 class ModelCache {
 public:
     void setRoot(std::filesystem::path r) { root_ = std::move(r); }

@@ -51,14 +51,33 @@ static int dumpSprite(const fs::path& root, const std::string& id, const fs::pat
 }
 
 // Tiny software rasterizer (z-buffer, nearest texel) for headless model previews.
+// fit = true: scale/center the posed geometry into the cell (effects have no "feet").
 static void rasterModel(const Model& m, const std::vector<Image>& tex, const Pose& pose, Image& dst, int ox, int oy,
-                        int cell, float scale, float yaw) {
+                        int cell, float scale, float yaw, bool fit = false) {
     std::vector<Mat34> mats;
     poseMatrices(m, pose, mats);
+    float fitX = 0, fitY = 0;
+    if (fit) {
+        float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f;
+        const float c = std::cos(yaw), s = std::sin(yaw);
+        for (size_t i = 0; i < m.nodes.size(); ++i) {
+            if (m.nodes[i].mesh < 0) continue;
+            for (auto& v : m.meshes[size_t(m.nodes[i].mesh)].verts) {
+                float x, y, z;
+                xform(mats[i], v[0], v[1], v[2], x, y, z);
+                float rx = x * c + z * s;
+                x0 = std::min(x0, rx); x1 = std::max(x1, rx); y0 = std::min(y0, y); y1 = std::max(y1, y);
+            }
+        }
+        if (x1 < x0) return;
+        scale = (cell - 8) / std::max(1.f, std::max(x1 - x0, y1 - y0));
+        fitX = -(x0 + x1) * 0.5f * scale;
+        fitY = cell * 0.5f - (y0 + y1) * 0.5f * scale - (cell - 4);
+    }
     std::vector<float> zb(size_t(cell) * cell, 1e30f);
     const float cy = std::cos(yaw), sy = std::sin(yaw);
     struct P { float x, y, z, u, v; };
-    auto tri = [&](const P& a, const P& b, const P& c, const Image& t) {
+    auto tri = [&](const P& a, const P& b, const P& c, const Image& t, int blend) {
         float den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
         if (std::fabs(den) < 1e-6f) return;
         int x0 = std::max(0, int(std::floor(std::min({a.x, b.x, c.x})))), x1 = std::min(cell - 1, int(std::ceil(std::max({a.x, b.x, c.x}))));
@@ -76,8 +95,16 @@ static void rasterModel(const Model& m, const std::vector<Image>& tex, const Pos
                 int u = int(l0 * a.u + l1 * b.u + l2 * c.u) & 255, v = int(l0 * a.v + l1 * b.v + l2 * c.v) & 255;
                 uint32_t col = t.at(u, v);
                 if (!(col >> 24)) continue;
-                zz = z;
-                dst.px[size_t(oy + y) * dst.w + ox + x] = col;
+                uint32_t& d = dst.px[size_t(oy + y) * dst.w + ox + x];
+                if (blend == 0) { zz = z; d = col; continue; }
+                if (blend == 3) continue;  // subtractive: skipped in previews
+                uint32_t outc = 0xff000000u;
+                for (int sh = 0; sh < 24; sh += 8) {
+                    int dc = int((d >> sh) & 255), sc = int((col >> sh) & 255);
+                    int r = blend == 1 ? (dc + sc) / 2 : blend == 4 ? dc + sc / 4 : dc + sc;
+                    outc |= uint32_t(std::min(255, r)) << sh;
+                }
+                d = outc;
             }
     };
     for (size_t i = 0; i < m.nodes.size(); ++i) {
@@ -88,21 +115,26 @@ static void rasterModel(const Model& m, const std::vector<Image>& tex, const Pos
             float x, y, z;
             xform(mats[i], mesh.verts[k][0], mesh.verts[k][1], mesh.verts[k][2], x, y, z);
             float rx = x * cy + z * sy, rz = -x * sy + z * cy;
-            vs[k] = {cell * 0.5f + rx * scale, cell - 4 + y * scale, rz, 0, 0};
+            vs[k] = {cell * 0.5f + rx * scale + fitX, cell - 4 + y * scale + fitY, rz, 0, 0};
         }
         for (const ModelPrim& pr : mesh.prims) {
             P q[4];
             for (int k = 0; k < pr.count; ++k) { q[k] = vs[pr.v[k]]; q[k].u = pr.u[k] + 0.5f; q[k].v = pr.t[k] + 0.5f; }
-            tri(q[0], q[1], q[2], tex[pr.clut]);
-            if (pr.count == 4) tri(q[1], q[3], q[2], tex[pr.clut]);
+            tri(q[0], q[1], q[2], tex[pr.clut], pr.blend);
+            if (pr.count == 4) tri(q[1], q[3], q[2], tex[pr.clut], pr.blend);
         }
     }
 }
 
 static int dumpModel(const fs::path& root, const std::string& id, const fs::path& out, int onlyClip) {
+    // "M005GREY" searches DAT/MODEL; "EFFECT/MEFT0024" searches another DAT folder.
+    fs::path dir = root / "DAT" / "MODEL";
+    std::string prefix = id;
+    if (auto slash = id.find('/'); slash != std::string::npos) { dir = root / "DAT" / id.substr(0, slash); prefix = id.substr(slash + 1); }
+    const bool fit = prefix.rfind("M", 0) != 0 || !std::isdigit(static_cast<unsigned char>(prefix.size() > 1 ? prefix[1] : 'x'));
     fs::path file;
-    for (auto& e : fs::directory_iterator(root / "DAT" / "MODEL"))
-        if (e.path().filename().string().rfind(id, 0) == 0) { file = e.path(); break; }
+    for (auto& e : fs::directory_iterator(dir))
+        if (e.path().filename().string().rfind(prefix, 0) == 0) { file = e.path(); break; }
     Bytes b;
     if (file.empty() || !readFile(file, b)) { std::printf("cannot find model %s\n", id.c_str()); return 1; }
     Model m; std::string err;
@@ -132,7 +164,45 @@ static int dumpModel(const fs::path& root, const std::string& id, const fs::path
         const float step = float(c.length) / cols;
         for (int k = 0; k < cols; ++k) {
             if (k) pl.update(m, step);
-            rasterModel(m, tex, pl.pose(), sheet, k * cell, int(r) * cell, cell, scale, 0.9f);
+            rasterModel(m, tex, pl.pose(), sheet, k * cell, int(r) * cell, cell, scale, 0.9f, fit);
+        }
+    }
+    return writeBmp(out, sheet) ? 0 : 1;
+}
+
+// Every effect model (DAT/EFFECT/MEFT*) in one sheet: 4 frames of clip 0 per row, 2 effects per row.
+static int sheetEffects(const fs::path& root, const fs::path& out) {
+    std::vector<fs::path> files;
+    for (auto& e : fs::directory_iterator(root / "DAT" / "EFFECT"))
+        if (e.path().filename().string().rfind("MEFT", 0) == 0) files.push_back(e.path());
+    std::sort(files.begin(), files.end());
+    const int cell = 80, per = 4, perRow = 2;
+    struct Item { std::string name; Model m; };
+    std::vector<Item> ok;
+    for (auto& f : files) {
+        Bytes b; Item it; std::string err;
+        it.name = f.stem().string();
+        if (!readFile(f, b) || !loadModel(b, it.m, err)) { std::printf("SKIP %s: %s\n", it.name.c_str(), err.c_str()); continue; }
+        ok.push_back(std::move(it));
+    }
+    const int rows = int((ok.size() + perRow - 1) / perRow);
+    Image sheet; sheet.resize(per * perRow * cell + (perRow - 1) * 8, rows * cell, rgba(24, 24, 32));
+    for (size_t i = 0; i < ok.size(); ++i) {
+        const Model& m = ok[i].m;
+        const int r = int(i) / perRow, c0 = int(i % perRow) * (per * cell + 8);
+        std::printf("row %3d %s: %s\n", r, i % perRow ? "right" : "left ", ok[i].name.c_str());
+        std::vector<Image> tex;
+        for (size_t c = 0; c < m.cluts.size(); ++c) tex.push_back(m.textureFor(c));
+        int clip = 0;
+        while (size_t(clip) < m.clips.size() && !m.clips[size_t(clip)].valid()) ++clip;
+        ClipPlayer pl;
+        pl.play(m, clip);
+        const float len = size_t(clip) < m.clips.size() ? float(m.clips[size_t(clip)].length) : 1.f;
+        for (int k = 0; k < per; ++k) {
+            pl.update(m, k ? len / per : len * 0.1f);
+            Pose pose = pl.pose();
+            if (pose.size() != m.nodes.size()) samplePose(m, float(k) * 10.f, pose);
+            rasterModel(m, tex, pose, sheet, c0 + k * cell, r * cell, cell, 1.f, 0.6f, true);
         }
     }
     return writeBmp(out, sheet) ? 0 : 1;
@@ -149,6 +219,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--dump-stage") && i + 2 < argc) return dumpStage(root, argv[i + 1], argv[i + 2]);
         if (!std::strcmp(argv[i], "--dump-sprite") && i + 2 < argc) return dumpSprite(root, argv[i + 1], argv[i + 2]);
+        if (!std::strcmp(argv[i], "--sheet-effects") && i + 1 < argc) return sheetEffects(root, argv[i + 1]);
         if (!std::strcmp(argv[i], "--dump-model") && i + 2 < argc)
             return dumpModel(root, argv[i + 1], argv[i + 2], i + 3 < argc ? std::atoi(argv[i + 3]) : -1);
     }

@@ -21,10 +21,10 @@ struct ModelPrim {
     uint8_t count = 3;                  // 3 = triangle, 4 = quad (PS1 order: 0,1,2 + 1,3,2)
     uint8_t v[4]{}, n[4]{};             // vertex / normal indices (normals only when lit)
     uint8_t u[4]{}, t[4]{};             // absolute texel coords in the 256x256 texture
-    uint8_t clut = 0;                   // index into Model::cluts
+    uint8_t clut = 0;                   // index into Model::cluts (a CLUT lives in one texture page)
     bool lit = true;                    // false: flat colour (r, g, b; 128 = 1.0), no normals
     uint8_t r = 128, g = 128, b = 128;
-    uint8_t blend = 0;                  // PS1 semi-transparency mode (state 0xE?)
+    uint8_t blend = 0;                  // state 0xE?: 0 opaque, 1 average, 2 additive, 3 subtract, 4 add 1/4
 };
 
 struct ModelMesh {
@@ -54,16 +54,19 @@ struct Model {
     std::vector<ModelMesh> meshes;
     std::vector<ModelTrack> tracks;
     std::vector<ModelClip> clips;
-    std::vector<std::array<int, 2>> cluts;  // (x in 16-bit words, y row) inside the texture
-    std::vector<uint16_t> vram;             // texture as 64x256 16-bit words (4bpp pixels + CLUT rows)
+    std::vector<std::array<int, 3>> cluts;  // (page, x in 16-bit words, y row)
+    // Texture pages, each 64x256 16-bit words (256x256 4bpp texels + CLUT rows). Effects may
+    // have none (they use the shared MEFTBASE pages in VRAM).
+    std::vector<std::vector<uint16_t>> pages;
     static constexpr int kTexW = 256, kTexH = 256;
 
-    uint8_t texel(int u, int v) const {     // 4bpp palette index
-        uint16_t w = vram[size_t(v & 255) * 64 + size_t((u & 255) >> 2)];
+    uint8_t texel(size_t page, int u, int v) const {  // 4bpp palette index
+        uint16_t w = pages[page][size_t(v & 255) * 64 + size_t((u & 255) >> 2)];
         return uint8_t((w >> ((u & 3) * 4)) & 15);
     }
-    // RGBA texture for one CLUT (palette colour 0x0000 is transparent).
+    // RGBA texture for one CLUT (palette colour 0x0000 is transparent). Without pages: plain white.
     Image textureFor(size_t clut) const;
+    bool hasTexture() const { return !pages.empty(); }
     // Height of the bind pose in model units (feet at y = 0, up is -y).
     float height = 0;
 };
