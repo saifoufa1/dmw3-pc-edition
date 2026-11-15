@@ -18,7 +18,8 @@ add_library(dw3formats STATIC
   src/formats/tim.cpp
   src/formats/rlen.cpp
   src/formats/sprite_pack.cpp
-  src/formats/stage_pack.cpp)
+  src/formats/stage_pack.cpp
+  src/formats/model.cpp)
 target_include_directories(dw3formats PUBLIC src)
 
 # --- Asset checker / dumper (console) ---
@@ -30,6 +31,7 @@ if(WIN32)
   add_executable(dmw3 WIN32
     src/platform/win32_main.cpp
     src/render/gl_renderer.cpp
+    src/render/model_renderer.cpp
     src/game/common.cpp
     src/game/stage_data.cpp
     src/game/field.cpp

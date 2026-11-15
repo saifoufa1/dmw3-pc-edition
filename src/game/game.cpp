@@ -1,5 +1,6 @@
 #include "game/game.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace dw3 {
@@ -10,11 +11,15 @@ constexpr int kTransTicks = 36;
 
 bool Game::init(const std::filesystem::path& dataRoot, const std::filesystem::path& stageDir,
                 const std::string& startStage, const DebugOptions& dbg, std::string& err) {
+    models_.setRoot(dataRoot);
+    dbg_ = dbg;
     if (!field_.init(dataRoot, stageDir, startStage, err)) return false;
     if (dbg.startBattle) {
         const bool boss = dbg.battleSprite != "P171BAGM";
         BattleRequest r{dbg.battleSprite, boss ? "Digmon" : "Black Agumon", boss ? 8 : 3, boss};
         if (!battle_.start(r, &field_.stageTexture(), field_.camX(), field_.camY(), err)) return false;
+        if (dbg.startForm > 0) battle_.debugSetForm(std::min(dbg.startForm, kMaxEvo));
+        if (dbg.fullDv) battle_.debugFillDv();
         mode_ = Mode::Battle;
     }
     return true;
@@ -32,7 +37,10 @@ void Game::update(const Input& in) {
             break;
         case Mode::ToBattle:
             if (++trans_ >= kTransTicks) {
-                if (battle_.start(pending_, &field_.stageTexture(), field_.camX(), field_.camY(), error_)) mode_ = Mode::Battle;
+                if (battle_.start(pending_, &field_.stageTexture(), field_.camX(), field_.camY(), error_)) {
+                    mode_ = Mode::Battle;
+                    if (dbg_.fullDv) battle_.debugFillDv();
+                }
                 else { field_.endBattle(true); mode_ = Mode::Field; }
             }
             break;

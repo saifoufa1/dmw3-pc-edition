@@ -9,7 +9,8 @@ A native C++ engine that runs **Digimon World 3** (PlayStation, 2002) on PC by r
 - ✅ Walls/collision, exits between maps (S200 town ⇄ S400 forest), placed NPCs: **talk** and **fight/boss** (touch to fight)
 - ✅ Real-time battle: partner moves freely, 3 attack buttons + guard, DV gauge → digivolve (each stage is bigger: ×1.0 / ×1.45 / ×1.9 / ×2.4)
 - ✅ In-game stage editor (F2): paint walls, draw exits, place NPCs, set spawn → saved to `data/stages/*.stage`
-- ⏳ Real digivolved forms from the 3D battle models (DAT/MODEL), original NPC/exit data, audio, menus — see [docs/ROADMAP.md](docs/ROADMAP.md)
+- ✅ Battle partner drawn with the original **3D battle models** (DAT/MODEL decoded): Agumon -> Greymon -> MetalGreymon -> WarGreymon, each with its own animations, size and 3 moves; full digivolution sequence (charge, white silhouette, grow, flash, roar)
+- ⏳ Enemies as 3D models too, original NPC/exit data, audio, menus — see [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ## Controls
 | Action | Keyboard | Gamepad |
@@ -41,9 +42,9 @@ Maps without a file get automatic walls (background holes) — open the editor w
    ```
    build.bat
    ```
-3. Run `build\dmw3.exe` (optional: `--stage S400`, or test a fight directly: `--battle`, `--boss P123DIGM`).
+3. Run `build\dmw3.exe` (optional: `--stage S400`, or test a fight directly: `--battle`, `--boss P123DIGM`, `--form 1` = start as Greymon, `--dv` = full digivolve gauge).
 
-`build\dw3check.exe` validates your data and all parsers; `--dump-stage S200 out.bmp` / `--dump-sprite P006AGUM out.bmp` render assets for inspection.
+`build\dw3check.exe` validates your data and all parsers; `--dump-stage S200 out.bmp` / `--dump-sprite P006AGUM out.bmp` / `--dump-model M005GREY out.bmp` (every animation clip as a sheet) render assets for inspection.
 
 ## Docs
 - [docs/FORMATS.md](docs/FORMATS.md) — reverse-engineered file formats
