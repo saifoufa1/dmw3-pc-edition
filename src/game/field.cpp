@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstdio>
+#include <map>
 
 #include "core/bytes.h"
 
@@ -23,7 +25,116 @@ float dist(float ax, float ay, float bx, float by) { return std::sqrt((ax - bx) 
 enum : int { VK_CTRL = 0x11, VK_LBRACKET = 0xDB, VK_RBRACKET = 0xDD, VK_COMMA = 0xBC, VK_PERIOD = 0xBE };
 }  // namespace
 
-Field::~Field() { gfx::destroy(stageTex_); }
+Field::~Field() {
+    gfx::destroy(stageTex_);
+    clearPieceTex();
+}
+
+void Field::clearPieceTex() {
+    for (auto& p : pieceTex_) gfx::destroy(p.tex);
+    pieceTex_.clear();
+}
+
+const Field::PieceTex* Field::pieceTex(int piece) {
+    if (piece < 0 || size_t(piece) >= fstage_.pieces.size()) return nullptr;
+    if (pieceTex_.size() != fstage_.pieces.size()) pieceTex_.resize(fstage_.pieces.size());
+    PieceTex& pt = pieceTex_[size_t(piece)];
+    if (!pt.tried) {
+        pt.tried = true;
+        Image img;
+        if (fstage_.renderPiece(piece, img, pt.ox, pt.oy)) pt.tex = gfx::upload(img);
+    }
+    return pt.tex.id ? &pt : nullptr;
+}
+
+// Original per-stage data: DAT/FIELD/STAGE/S###MASK.BIN + S###TMPK.BIN (walk map, trigger map, scene
+// pieces) and PRO/WSTAG###.PRO (player start, scene objects, event actors). Static opaque pieces are
+// baked into the background (they fill the "holes" of the Z_STAGE pack: doors, machines, signs);
+// animated and glow pieces are drawn every frame.
+void Field::loadOriginalStage(const std::string& id) {
+    fstage_ = {};
+    overlay_ = {};
+    anims_.clear();
+    clearPieceTex();
+    Bytes mask, tmpk, pro;
+    readFile(root_ / "DAT" / "FIELD" / "STAGE" / (id + "MASK.BIN"), mask);
+    readFile(root_ / "DAT" / "FIELD" / "STAGE" / (id + "TMPK.BIN"), tmpk);
+    loadFieldStage(mask, tmpk, stage_.gridW, stage_.gridH, fstage_);
+    if (readFile(root_ / "PRO" / ("WSTAG" + id.substr(1) + ".PRO"), pro)) loadStageOverlay(pro, overlay_);
+
+    Image& bg = stage_.image;
+    for (const auto& o : overlay_.objects) {
+        SceneAnim a;
+        a.x = o.x;
+        a.y = o.y;
+        a.delay = std::max(2, o.delay * 2);
+        if (o.mode == 1) {  // cycle frame ids loopFrom..loopTo
+            for (int f = o.loopFrom; f <= o.loopTo && f < 256; ++f) {
+                int pi = fstage_.pieceForFrame(f);
+                if (pi >= 0) a.pieces.push_back(pi);
+            }
+        } else if (o.mode == 2) {  // base frame + sub-counter loopFrom..loopTo (hypothesis, see FORMATS.md)
+            for (int k = o.loopFrom; k <= o.loopTo && o.frame + k < 256; ++k) {
+                int pi = fstage_.pieceForFrame(o.frame + k);
+                if (pi >= 0) a.pieces.push_back(pi);
+            }
+        } else {
+            int pi = fstage_.pieceForFrame(o.frame);
+            if (pi >= 0) a.pieces.push_back(pi);
+        }
+        if (a.pieces.empty()) continue;
+        a.additive = fstage_.pieces[size_t(a.pieces[0])].flag != -1;
+        if (a.pieces.size() == 1 && !a.additive) {  // static opaque piece: bake into the background
+            Image img;
+            int ox, oy;
+            if (!fstage_.renderPiece(a.pieces[0], img, ox, oy)) continue;
+            for (int y = 0; y < img.h; ++y)
+                for (int x = 0; x < img.w; ++x) {
+                    const uint32_t c = img.px[size_t(y) * img.w + x];
+                    const int dx = o.x + ox + x, dy = o.y + oy + y;
+                    if ((c >> 24) && bg.inside(dx, dy)) bg.px[size_t(dy) * bg.w + dx] = c;
+                }
+            continue;
+        }
+        anims_.push_back(std::move(a));
+    }
+}
+
+void Field::applyOriginalWalls() {
+    data_.cell = 4;
+    data_.resize(stage_.image.w, stage_.image.h);
+    for (int cy = 0; cy < data_.rows; ++cy)
+        for (int cx = 0; cx < data_.cols; ++cx)
+            data_.setWallCell(cx, cy, fstage_.walkAt(cx * 4 + 2, cy * 4 + 2) == 0);
+    data_.originalWalls = true;
+}
+
+void Field::addOriginalNpcs() {
+    // Several records share an actor slot (one per story state): show the most common variant.
+    std::map<int, std::map<int, int>> votes;
+    std::map<int, const OverlayActor*> first;
+    for (const auto& a : overlay_.actors) {
+        votes[a.slot][a.charId]++;
+        if (!first.count(a.slot * 1000 + a.charId)) first[a.slot * 1000 + a.charId] = &a;
+    }
+    for (const auto& [slot, v] : votes) {
+        int best = -1, n = 0;
+        for (const auto& [cid, c] : v)
+            if (c > n) { n = c; best = cid; }
+        const OverlayActor* a = first[slot * 1000 + best];
+        const size_t num = size_t(a->charId & 0xFF);
+        if (num >= spriteByNumber_.size() || spriteByNumber_[num].empty()) continue;
+        NpcDef d;
+        d.kind = NpcKind::Talk;
+        d.sprite = spriteByNumber_[num];
+        d.x = a->x;
+        d.y = a->y;
+        d.dir = a->dir & 7;
+        d.name = d.sprite.substr(4);
+        d.text = "(Original NPC position. Dialogue not decoded yet.)";
+        data_.npcs.push_back(d);
+    }
+}
 
 bool Field::init(const fs::path& dataRoot, const fs::path& stageDir, const std::string& startStage, std::string& err) {
     root_ = dataRoot;
@@ -36,6 +147,21 @@ bool Field::init(const fs::path& dataRoot, const fs::path& stageDir, const std::
     std::sort(stageIds_.begin(), stageIds_.end());
     if (stageIds_.empty()) { err = "no stages in DAT/Z_STAGE"; return false; }
     npcSprites_ = sprites_.listMovable();
+    // P### number -> sprite id (first file with that number, e.g. 57 -> P057AOAB).
+    spriteByNumber_.assign(256, std::string());
+    std::vector<std::string> sprt;
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(root_ / "DAT" / "FIELD" / "SPRT", ec)) {
+        std::string n = e.path().stem().string();
+        if (n.size() == 8 && n[0] == 'P' && std::isdigit((unsigned char)n[1]) && std::isdigit((unsigned char)n[2]) &&
+            std::isdigit((unsigned char)n[3]))
+            sprt.push_back(n);
+    }
+    std::sort(sprt.begin(), sprt.end());
+    for (const auto& n : sprt) {
+        const int num = std::stoi(n.substr(1, 3));
+        if (num < 256 && spriteByNumber_[size_t(num)].empty()) spriteByNumber_[size_t(num)] = n;
+    }
 
     player_.sprite = sprites_.get("P001PLAY", &err);
     if (!player_.sprite) return false;
@@ -59,18 +185,27 @@ bool Field::loadStage(size_t index, std::string& err, int arriveX, int arriveY) 
     }
     gfx::destroy(stageTex_);
     stage_ = std::move(m);
-    stageTex_ = gfx::upload(stage_.image);
     stageIndex_ = index;
+    loadOriginalStage(id);  // bakes the original scene pieces into stage_.image
+    stageTex_ = gfx::upload(stage_.image);
 
     std::string e;
     data_ = {};
     bool haveFile = fs::exists(stageDir_ / (id + ".stage")) && loadStageData(stageDir_ / (id + ".stage"), data_, e);
-    const int wantCols = (stage_.image.w + data_.cell - 1) / data_.cell, wantRows = (stage_.image.h + data_.cell - 1) / data_.cell;
-    if (!haveFile || data_.cols != wantCols || data_.rows != wantRows) {
-        auto keep = data_;
-        data_.resize(stage_.image.w, stage_.image.h);
-        data_.autoWalls(stage_.image);  // default: background holes are walls
-        if (haveFile) { data_.exits = keep.exits; data_.npcs = keep.npcs; data_.items = keep.items; data_.spawnX = keep.spawnX; data_.spawnY = keep.spawnY; }
+    if (fstage_.hasWalk && (!haveFile || data_.originalWalls || !data_.hasWallGrid)) {
+        applyOriginalWalls();  // the game's own walk map
+    } else {
+        const int wantCols = (stage_.image.w + data_.cell - 1) / data_.cell, wantRows = (stage_.image.h + data_.cell - 1) / data_.cell;
+        if (!haveFile || data_.cols != wantCols || data_.rows != wantRows) {
+            auto keep = data_;
+            data_.resize(stage_.image.w, stage_.image.h);
+            data_.autoWalls(stage_.image);  // fallback: background holes are walls
+            if (haveFile) { data_.exits = keep.exits; data_.npcs = keep.npcs; data_.items = keep.items; data_.spawnX = keep.spawnX; data_.spawnY = keep.spawnY; }
+        }
+    }
+    if (!haveFile) {
+        addOriginalNpcs();
+        if (overlay_.spawnX >= 0 && fstage_.walkAt(overlay_.spawnX, overlay_.spawnY)) { data_.spawnX = overlay_.spawnX; data_.spawnY = overlay_.spawnY; }
     }
     buildNpcs();
 
@@ -94,6 +229,12 @@ void Field::buildNpcs() {
         n.actor.x = float(n.def.x);
         n.actor.y = float(n.def.y);
         n.actor.dir = Dir(n.def.dir & 7);
+        n.actor.tick();
+        if (n.actor.sprite && n.actor.anim < 0) {  // not a full idle/walk set (e.g. P109MTHI): show its first anim
+            const auto& anims = n.actor.sprite->pack.anims;
+            for (size_t a = 0; a < anims.size(); ++a)
+                if (!anims[a].keys.empty()) { n.actor.anim = int(a); break; }
+        }
         n.defeated = defeated_.count(stageIds_[stageIndex_] + "#" + std::to_string(i)) > 0;
         npcs_.push_back(std::move(n));
     }
@@ -249,6 +390,8 @@ void Field::update(const Input& in) {
         player_.move = Move::Idle;
     }
     updatePartner(speed);
+    for (auto& a : anims_)
+        if (a.pieces.size() > 1 && ++a.timer >= a.delay) { a.timer = 0; a.cur = (a.cur + 1) % a.pieces.size(); }
     player_.tick();
     partner_.tick();
     for (auto& n : npcs_) n.actor.tick();
@@ -326,8 +469,12 @@ void Field::updateEditor(const Input& in) {
     }
     if (tool_ == Tool::Npcs && in.keyP['T'])
         npcKind_ = npcKind_ == NpcKind::Talk ? NpcKind::Fight : npcKind_ == NpcKind::Fight ? NpcKind::Boss : NpcKind::Talk;
-    if (ctrl && in.keyP['G']) { data_.autoWalls(stage_.image); status_ = "Walls reset from background"; statusTimer_ = 120; }
-    if (ctrl && in.keyP['X']) { std::fill(data_.wall.begin(), data_.wall.end(), uint8_t(0)); status_ = "All walls cleared"; statusTimer_ = 120; }
+    if (ctrl && in.keyP['G']) {
+        if (fstage_.hasWalk) { applyOriginalWalls(); status_ = "Walls reset from the game's walk map"; }
+        else { data_.autoWalls(stage_.image); status_ = "Walls reset from background"; }
+        statusTimer_ = 120;
+    }
+    if (ctrl && in.keyP['X']) { std::fill(data_.wall.begin(), data_.wall.end(), uint8_t(0)); data_.originalWalls = false; status_ = "All walls cleared"; statusTimer_ = 120; }
     if (ctrl && in.keyP['S']) {
         bool ok = saveStageData(stageFile(), data_);
         status_ = ok ? "Saved " + stageFile() : "SAVE FAILED: " + stageFile();
@@ -340,6 +487,7 @@ void Field::updateEditor(const Input& in) {
     switch (tool_) {
         case Tool::Walls:
             if (in.lmb || in.rmb) {
+                data_.originalWalls = false;  // hand-painted walls are saved as a grid
                 int cx = mx / data_.cell, cy = my / data_.cell;
                 for (int y = cy - brush_; y <= cy + brush_; ++y)
                     for (int x = cx - brush_; x <= cx + brush_; ++x) data_.setWallCell(x, y, in.lmb);
@@ -417,6 +565,14 @@ void Field::renderEditor() {
 
 void Field::render() {
     gfx::drawTexture(stageTex_, -camX_, -camY_);
+    for (const auto& a : anims_) {  // original animated scene pieces and glows
+        const PieceTex* pt = pieceTex(a.pieces[a.cur]);
+        if (!pt) continue;
+        const float x = float(a.x + pt->ox) - camX_, y = float(a.y + pt->oy) - camY_;
+        if (x > kScreenW || y > kScreenH || x + pt->tex.w < 0 || y + pt->tex.h < 0) continue;
+        if (a.additive) gfx::drawSprite(pt->tex, x, y, false, 1.f, 0xffffffffu, true);
+        else gfx::drawTexture(pt->tex, x, y);
+    }
 
     // painter's order by feet Y
     struct Item { float y; int kind; size_t idx; };

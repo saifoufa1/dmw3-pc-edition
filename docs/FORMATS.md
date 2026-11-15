@@ -51,18 +51,70 @@ A slot is either `RLEN`-compressed or raw. Decompressed chunk:
 | TIM offset | TIM | 8bpp atlas, 256-colour CLUT |
 
 `Rect = u16 dstX, dstY, srcX, srcY, w, h` (dst relative to the cell). The current renderer draws both layers into one background.
-**Open:** whether layer B should be drawn above actors; black holes in some maps are filled by `FIELD/STAGE/S###TMPK.BIN` (animated tiles).
+**Open:** whether layer B should be drawn above actors; black holes are filled by the MASK/TMPK scene pieces placed by the WSTAG overlay (see below).
 
-## FIELD/STAGE/S###MASK.BIN — partial
-`u32 offsets[4]` (0-terminated) → RLEN blocks, each a TIM: block 0 = 8bpp 128x256 with 11 CLUT rows, blocks 1-2 = 128x256 8bpp-in-16bpp texture pages (use block 0's CLUTs).
-Rendered, they are **texture atlases of scene pieces** (not collision): most likely the foreground/occluder pieces and animated objects drawn over actors.
+## FIELD/STAGE/S###MASK.BIN — verified (237/237)
+`u32 offsets[]` (0-terminated) → RLEN blocks, each a TIM. Block 0 = 8bpp 128x256 with `n` CLUT rows (256 colours each);
+blocks 1.. = 16bpp 64x256 TIMs that are really 8bpp texture pages (128 texels wide). Side by side they form one
+8bpp **scene-piece atlas** (`128 * blocks` x 256) that uses block 0's CLUT rows. Code: `src/formats/field_stage.cpp`.
+Contents: the pieces that the Z_STAGE background leaves black (doors, machines, fountains, signs, lamps, glows).
+**Open:** the 4bpp effect parts (kind 0, below) use a palette that is *not* in MASK (probably a shared VRAM CLUT
+loaded by FIELDSTG); we draw them additively with a generated warm ramp.
 
-## FIELD/STAGE/S###TMPK.BIN — partial
-`u32 sectionOffsets[3]`. Section 0: offset table → small records `{u16 count, u16 0, i16 flag, u16 frameIds...}` = sprite-part / tile-animation scripts that reference the MASK atlases (fills the black holes in Z_STAGE maps). Sections 1-2: animation timing tables (contain 1802 marker).
+## FIELD/STAGE/S###TMPK.BIN — verified for parts/pieces/walk/trigger, partial otherwise
+`u32 sectionOffsets[]`; section kinds are recognised by content, not by index (order varies):
 
-## Collision / exits / NPCs — not in data files
-Not found in DAT. `PRO/WSTAG###.PRO` are raw MIPS overlays (start with code, e.g. `addiu sp,sp,-32`) and contain coordinate-like tables (e.g. WSTAG200 @0x2BA: pairs such as 1048,212 / 1096,286). Original collision/exits are likely compiled into these overlays.
-**Decision:** the PC edition uses its own `data/stages/*.stage` files (see README); decoding the overlays stays a research task.
+**Parts/pieces table** (offset table of entries):
+| entry | layout | confidence |
+|---|---|---|
+| 0 | `n × {u16 x, y, w, h, clut, rowOrDepth, kind}` (14 bytes, table padded to 4) | verified |
+| 1 | ascending u8 frame ids, `0xFF` terminated. Piece for frame id `f` = (index of `f` in this list) + 2 | verified |
+| 2.. | piece: `u16 count, u16 0, i16 flag, count × {u16 part, i16 dx, i16 dy}` | verified |
+- `kind 1` = 8bpp part in the MASK atlas, CLUT row = `rowOrDepth - 256`. Wide pieces are cut into vertical strips laid side by side via `dx`.
+- `kind 0` = 4bpp effect part; `x` is in 4bpp texels; `clut` = palette (row `>>4`, bank `&15`); `rowOrDepth` 0xE9..0xFC unknown.
+- `flag -1` = opaque piece, other values (seen: 3) = glow/additive.
+
+**Quadtree maps** (walk map and trigger map, same format; one each, told apart by max value: walk < 0x20):
+`u32 off[6]` (off[0] = 0x18) + `u32 (gh << 8) | gw`. At `off[0]`: `u8 gw, gh`, then one u8 node per 128 px grid cell.
+Level 1 = 4 × u8 children, levels 2–4 = 4 × u16 children (order TL, TR, BL, BR), level 5 = 8x8 byte leaves
+(128 → 64 → 32 → 16 → 8). Child/node index 0 = an all-zero block. Verified on S200/S202/S218 by overlaying on the map.
+- Walk map values: `0` blocked, `1` floor, `6` stairs (other small values: floor variants, open).
+- Trigger map values: `(type << 5) | index`; type 1 = map edge exit, type 3/5 = doors and links (seen on S200/S202/S218).
+  **Open:** the destination of each trigger is not in TMPK (it is in the WSTAG overlay code or the main executable).
+Other TMPK sections (animation timing, contain the 0x1802 marker) are not decoded.
+
+## PRO/WSTAG###.PRO — stage overlays — partial (236/237 parsed)
+Raw MIPS code loaded at `0x800A4CA0` (word 0 = 0x00966754 header). FIELDSTG.PRO (loaded at `0x80082448`) runs the
+stage's init function, which fills a **stage descriptor at `0x800990B4`** with `sw` stores of constants/pointers.
+`src/formats/stage_overlay.cpp` runs a tiny register tracker (lui/addiu/ori/addu moves, `sw` into the descriptor,
+stop at `jr ra`) to recover it without an emulator. WSTAG260 has another layout (not word aligned) and is skipped.
+| desc offset | meaning | confidence |
+|---|---|---|
+| +0x08, +0x0C (hi16), +0x1C | file ids (MASK/TMPK/PACK, order unresolved) | low |
+| +0x10 | pointer to the **scene-object list** | verified (S200/S202/S218) |
+| +0x14 | intro cutscene cast table | low |
+| +0x20 / +0x24 | runtime lists / callbacks | low |
+| +0x28 | VRAM sprite slots, 16 bytes each | medium |
+| +0x2C / +0x30 | player spawn, 8.8 fixed point (S200 = 1000,236) | high |
+| +0x34 | 1 only on S200 | unknown |
+| +0x44 | 205 or 240 (BGM or area id?) | unknown |
+| +0x4C | pointer list of **event actors** | high |
+
+**Scene object** (18 bytes, record starts at pointer − 4; FIELDSTG 0x80088880–0x80088BE0 reads stride 18):
+`u8 type, u8 link, u16 flags, u16 a (lo = frame id, hi = mode), u16 b (loopFrom | loopTo << 8), u16 c (delay),
+i16 x, i16 y (top-left of the piece in map px), u16 depthY (sort line), u16 unk`.
+mode 0 = static, mode 1 = cycle frames loopFrom..loopTo, mode 2 = frame + k (hypothesis). Delay ≈ `c * 2` ticks (guess).
+409/7108 objects have no piece (frame id not in TMPK) — event-controlled objects with link ≥ 0x64?, open.
+
+**Event actor** (20 bytes): `u32 condPtr, u16 charId, u16 slot, i16 x, i16 y, i16 dir, u16 pad, u32 next`.
+FIELDSTG code 0x8008A7D0 calls the actor creator 0x80090450(charId, 1, slot, rec). charId 1 = player (P001).
+`charId & 0xFF` = field sprite number `P###` (e.g. 57 → P057AOAB guard, 365 → P109MTHI, 371 → P115KNIG) —
+medium confidence; meaning of bit 0x100 and the `dir` numbering (we use it modulo 8) are open.
+Several records per slot exist (one per story state via `condPtr`); we take the most common charId per slot.
+
+**Still not decoded:** trigger destinations (exits/doors), NPC dialogue binding, the 0x14 cutscene table, story-state conditions.
+**Decision:** our `data/stages/*.stage` files hold exits/NPC lines (hand-written); `walls original` makes the game use the
+decoded walk map; stages without a .stage file get decoded spawn + event actors automatically (talk NPCs, no lines).
 
 
 ## Battle model (`DAT/MODEL/M###XXXX.BIN`)
@@ -92,3 +144,4 @@ model, so sections are identified by content:
   15 charge, 16 strike, 28/34 two/three-hit combo, 38/44 victory.
 - Another section (`u32 72` header, 18 entries) is probably the effect/sound script per action — not decoded.
 - 5 files use other layouts (effects / multi-part): reported by `dw3check` as SKIP.
+- No battle model exists for the field-only Digimon Black Agumon (P171BAGM), Blue Agumon (P167SAGM) or Digmon (P123DIGM): no file name matches and a contact sheet of all 241 loadable models shows none of them. The PC edition draws Black/Blue Agumon as M003AGUM with a palette recolour (`render/model_renderer` `Recolor`) and keeps Digmon as its field sprite.

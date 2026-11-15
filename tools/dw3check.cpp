@@ -16,9 +16,72 @@
 #include "formats/model.h"
 #include "formats/sprite_pack.h"
 #include "formats/stage_pack.h"
+#include "formats/field_stage.h"
+#include "formats/stage_overlay.h"
 
 namespace fs = std::filesystem;
 using namespace dw3;
+
+// Loads MASK/TMPK + WSTAG overlay of a stage (missing files are fine).
+static bool loadFieldAll(const fs::path& root, const std::string& id, int gw, int gh, FieldStage& f, StageOverlay& ov,
+                         std::string& err) {
+    Bytes mask, tmpk, pro;
+    readFile(root / "DAT" / "FIELD" / "STAGE" / (id + "MASK.BIN"), mask);
+    readFile(root / "DAT" / "FIELD" / "STAGE" / (id + "TMPK.BIN"), tmpk);
+    const bool okF = loadFieldStage(mask, tmpk, gw, gh, f, &err);
+    if (readFile(root / "PRO" / ("WSTAG" + id.substr(1) + ".PRO"), pro)) loadStageOverlay(pro, ov, &err);
+    return okF;
+}
+
+// Background + every scene object's first frame; optional walk (green) / trigger (cyan) tint and
+// event actor markers (magenta). Debug view only.
+static int dumpField(const fs::path& root, const std::string& id, const fs::path& out, bool overlay) {
+    Bytes b;
+    if (!readFile(root / "DAT" / "Z_STAGE" / (id + "PACK.BIN"), b)) { std::printf("cannot read %s\n", id.c_str()); return 1; }
+    StageMap m; std::string err;
+    if (!loadStagePack(b, m, &err)) { std::printf("stage %s: %s\n", id.c_str(), err.c_str()); return 1; }
+    FieldStage f; StageOverlay ov;
+    loadFieldAll(root, id, m.gridW, m.gridH, f, ov, err);
+    Image& im = m.image;
+    int drawn = 0, missing = 0;
+    for (const auto& o : ov.objects) {
+        const int frame = o.mode == 1 ? o.loopFrom : o.frame;
+        Image pc; int ox = 0, oy = 0;
+        const int pi = f.pieceForFrame(frame);
+        if (pi < 0 || !f.renderPiece(pi, pc, ox, oy)) { ++missing; continue; }
+        const bool add = f.pieces[size_t(pi)].flag != -1;
+        for (int y = 0; y < pc.h; ++y)
+            for (int x = 0; x < pc.w; ++x) {
+                const uint32_t c = pc.px[size_t(y) * pc.w + x];
+                const int dx = o.x + ox + x, dy = o.y + oy + y;
+                if (!(c >> 24) || !im.inside(dx, dy)) continue;
+                uint32_t& d = im.px[size_t(dy) * im.w + dx];
+                if (add) {
+                    uint32_t r = std::min(255u, (d & 255) + (c & 255)), g = std::min(255u, ((d >> 8) & 255) + ((c >> 8) & 255)),
+                             bl = std::min(255u, ((d >> 16) & 255) + ((c >> 16) & 255));
+                    d = rgba(uint8_t(r), uint8_t(g), uint8_t(bl));
+                } else d = c;
+            }
+        ++drawn;
+    }
+    if (overlay) {
+        for (int y = 0; y < im.h; ++y)
+            for (int x = 0; x < im.w; ++x) {
+                uint32_t& d = im.px[size_t(y) * im.w + x];
+                if (f.triggerAt(x, y)) d = rgba(0, 255, 255);
+                else if (f.walkAt(x, y) && ((x + y) % 4) == 0) d = rgba(0, 255, 0);
+            }
+        for (const auto& a : ov.actors)
+            for (int k = -4; k <= 4; ++k) {
+                if (im.inside(a.x + k, a.y)) im.px[size_t(a.y) * im.w + a.x + k] = rgba(255, 0, 255);
+                if (im.inside(a.x, a.y + k)) im.px[size_t(a.y + k) * im.w + a.x] = rgba(255, 0, 255);
+            }
+    }
+    std::printf("%s: %zu objects (%d drawn, %d without piece), %zu pieces, walk %d, trigger %d, %zu actors, spawn %d,%d\n",
+                id.c_str(), ov.objects.size(), drawn, missing, f.pieces.size(), f.hasWalk, f.hasTrigger, ov.actors.size(),
+                ov.spawnX, ov.spawnY);
+    return writeBmp(out, im, rgba(0, 0, 0)) ? 0 : 1;
+}
 
 static int dumpStage(const fs::path& root, const std::string& id, const fs::path& out) {
     Bytes b;
@@ -218,6 +281,8 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--dump-stage") && i + 2 < argc) return dumpStage(root, argv[i + 1], argv[i + 2]);
+        if (!std::strcmp(argv[i], "--dump-field") && i + 2 < argc)
+            return dumpField(root, argv[i + 1], argv[i + 2], i + 3 < argc && !std::strcmp(argv[i + 3], "--overlay"));
         if (!std::strcmp(argv[i], "--dump-sprite") && i + 2 < argc) return dumpSprite(root, argv[i + 1], argv[i + 2]);
         if (!std::strcmp(argv[i], "--sheet-effects") && i + 1 < argc) return sheetEffects(root, argv[i + 1]);
         if (!std::strcmp(argv[i], "--dump-model") && i + 2 < argc)
@@ -236,6 +301,7 @@ int main(int argc, char** argv) {
             std::all_of(sp.anims.begin(), sp.anims.begin() + 15, [](const Anim& a) { return !a.keys.empty(); });
         moveSets += hasMoveSet;
     }
+    int overlaySkipped = 0, fieldData = 0, walkMaps = 0, trigMaps = 0, pieceSets = 0, overlays = 0, objects = 0, objNoPiece = 0, actors = 0;
     for (auto& e : fs::directory_iterator(root / "DAT" / "Z_STAGE")) {
         Bytes b; StageMap m; std::string err;
         if (!readFile(e.path(), b) || !loadStagePack(b, m, &err)) {
@@ -244,6 +310,21 @@ int main(int argc, char** argv) {
         }
         ++stages; chunks += m.chunksDecoded; badChunks += m.chunksFailed;
         if (m.chunksFailed) std::printf("WARN stage %s: %d chunk(s) failed\n", e.path().filename().string().c_str(), m.chunksFailed);
+        // FIELD/STAGE MASK+TMPK and the PRO/WSTAG overlay of the same stage.
+        const std::string id = e.path().filename().string().substr(0, 4);
+        FieldStage f; StageOverlay ov;
+        const bool hasTmpk = fs::exists(root / "DAT" / "FIELD" / "STAGE" / (id + "TMPK.BIN"));
+        if (loadFieldAll(root, id, m.gridW, m.gridH, f, ov, err)) ++fieldData;
+        else if (hasTmpk) { std::printf("FAIL field %s: %s\n", id.c_str(), err.c_str()); ++failures; }
+        walkMaps += f.hasWalk; trigMaps += f.hasTrigger; pieceSets += !f.pieces.empty();
+        if (fs::exists(root / "PRO" / ("WSTAG" + id.substr(1) + ".PRO"))) {
+            // A few overlays use another layout (e.g. WSTAG260 is not word aligned): reported, not fatal.
+            if (!ov.ok) { std::printf("SKIP overlay WSTAG%s: no stage descriptor found\n", id.substr(1).c_str()); ++overlaySkipped; }
+            else ++overlays;
+        }
+        objects += int(ov.objects.size()); actors += int(ov.actors.size());
+        for (const auto& o : ov.objects)
+            if (f.pieceForFrame(o.mode == 1 ? o.loopFrom : o.frame) < 0) ++objNoPiece;
     }
     int models = 0, modelSkipped = 0;
     size_t modelPrims = 0;
@@ -262,6 +343,9 @@ int main(int argc, char** argv) {
     std::printf("models : %d loaded (%zu primitives), %d other layout (not yet supported)\n", models, modelPrims, modelSkipped);
     std::printf("sprites: %d packs, %d frames, %d with full idle/walk/run set\n", sprites, frames, moveSets);
     std::printf("stages : %d packs, %d chunks drawn, %d chunks failed\n", stages, chunks, badChunks);
+    std::printf("field  : %d MASK/TMPK sets (%d walk maps, %d trigger maps, %d piece tables)\n", fieldData, walkMaps, trigMaps, pieceSets);
+    std::printf("overlay: %d WSTAG parsed (%d other layout), %d scene objects (%d without piece), %d event actors\n",
+                overlays, overlaySkipped, objects, objNoPiece, actors);
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "OK", failures);
     return failures ? 1 : 0;
 }

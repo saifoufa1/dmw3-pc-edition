@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "formats/field_stage.h"
+#include "formats/stage_overlay.h"
 #include "formats/stage_pack.h"
 #include "game/common.h"
 #include "game/stage_data.h"
@@ -45,11 +47,29 @@ private:
         bool defeated = false;
     };
     enum class Tool { Walls, Exits, Npcs, Spawn };
+    // A scene object from the WSTAG overlay drawn every frame (animated or additive glow).
+    struct SceneAnim {
+        int x = 0, y = 0;
+        std::vector<int> pieces;  // piece index per animation frame
+        int delay = 8, timer = 0;
+        size_t cur = 0;
+        bool additive = false;
+    };
+    struct PieceTex {
+        Texture tex;
+        int ox = 0, oy = 0;
+        bool tried = false;
+    };
 
     bool loadStage(size_t index, std::string& err, int arriveX = -1, int arriveY = -1);
     bool walkable(float x, float y) const;
     void placeParty(float x, float y);
     void findAutoSpawn(float& x, float& y) const;
+    void loadOriginalStage(const std::string& id);  // MASK/TMPK + WSTAG overlay -> pieces, walk map
+    void applyOriginalWalls();
+    void addOriginalNpcs();                          // decoded event actors (stages without a .stage file)
+    const PieceTex* pieceTex(int piece);
+    void clearPieceTex();
     void buildNpcs();
     void updatePartner(float speed);
     void updateCamera();
@@ -66,6 +86,11 @@ private:
     StageMap stage_;
     StageData data_;
     Texture stageTex_;
+    FieldStage fstage_;                 // original walk/trigger maps + scene pieces
+    StageOverlay overlay_;              // original WSTAG tables (spawn, objects, event actors)
+    std::vector<SceneAnim> anims_;
+    std::vector<PieceTex> pieceTex_;
+    std::vector<std::string> spriteByNumber_;  // P### -> FIELD/SPRT id ("" if none)
 
     Actor player_, partner_;
     std::vector<NpcRt> npcs_;

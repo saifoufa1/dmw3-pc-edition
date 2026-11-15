@@ -1,0 +1,13 @@
+# DMW3 PC Edition stage data v1 (edit in-game with F2, or by hand)
+# exit  x y w h TARGET [arriveX arriveY]
+# npc   talk  SPRITE x y dir "Name" "Line one|Line two"
+# walls original = walls from the game's own walk map (DAT/FIELD/STAGE/S###TMPK.BIN)
+#
+# ASUKA CITY - north bridge + east patio (S218 = city pixels offset by +384,0 from S200).
+# exits = decoded trigger zones 0xA1 (bridge end) and 0x62 (patio); their target (S200) is hand-picked.
+# npc: decoded event actor of WSTAG218; line is ours.
+spawn 349 176
+exit 338 144 38 23 S200 719 246
+exit 848 286 44 24 S200 1110 300
+npc talk P077HASM 919 300 1 "Digimon" "The view from up here is great."
+walls original

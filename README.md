@@ -32,9 +32,10 @@ exit 0 792 18 64 S400 205 862                 # rect -> target stage + arrival p
 npc talk P011MINO 330 600 0 "Mina" "Line one|Line two"
 npc fight P171BAGM 610 482 7 "Black Agumon" 3  # touch it to fight
 npc boss P123DIGM 960 252 0 "Digmon" 8
-walls                                          # 8x8 px grid: '#' wall, '.' floor
+walls original                                 # use the game's own walk map (or: 'walls' + an 8x8 px grid of '#'/'.')
 ```
-Maps without a file get automatic walls (background holes) — open the editor with **F2** to author them.
+Maps without a file use the game's walk map, spawn point and NPC positions decoded from your disc (NPCs have no lines yet) — open the editor with **F2** to author them (Ctrl+G = back to the original walls).
+The game starts in Asuka City (S200, with S202 and S218).
 
 ## Setup
 1. Copy the disc's `DAT`, `PRO` and `STR` folders into a folder named `game_data` next to (or any parent folder of) the repo/exe. Or set `DW3_DATA=<folder>`, or pass `--data <folder>`.

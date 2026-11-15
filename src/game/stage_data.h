@@ -41,6 +41,8 @@ struct StageData {
     std::vector<NpcDef> npcs;
     std::vector<ItemDef> items;
     bool fromFile = false;
+    bool hasWallGrid = false;    // the file had a "walls" grid
+    bool originalWalls = false;  // "walls original": build walls from the game's own walk map (TMPK)
 
     void resize(int mapW, int mapH);
     bool isWall(int px, int py) const;  // outside the grid counts as wall

@@ -19,8 +19,8 @@ Goal: "the first hour of DW3 plays on PC natively".
 
 | # | Milestone | Owner agent |
 |---|---|---|
-| 1 | Collision + depth from `S###MASK.BIN`; layer-B foreground; animated tiles `TMPK` | ps1-reverse-engineer, graphics-programmer |
-| 2 | Stage exits/transitions and spawn points (from `PRO/WSTAG###.PRO` overlays) | ps1-reverse-engineer, gameplay-systems-designer |
+| 1 | ✅ Walk map + scene pieces (`MASK`/`TMPK`) and object/actor placement (`WSTAG` overlays) decoded. **Next:** depth sorting (draw pieces over actors by `depthY`), 4bpp glow palette, remaining black holes | ps1-reverse-engineer, graphics-programmer |
+| 2 | Spawn points ✅ decoded; exit *zones* ✅ decoded (trigger map). **Next:** exit/door destinations (in overlay code or main exe) | ps1-reverse-engineer, gameplay-systems-designer |
 | 3 | Text + font (`COMMON/CMFONT*`, `FIELDMES.BIN`), dialogue boxes, NPCs | gameplay-systems-designer, graphics-programmer |
 | 4 | Audio: SPU ADPCM banks + sequenced BGM | audio-engineer |
 | 5 | ✅ `DAT/MODEL` decoded; partner forms are the real 3D models with their own clips + digivolution sequence. **Next:** enemies as 3D models, effect scripts | graphics-programmer, gameplay-systems-designer |
@@ -32,4 +32,9 @@ Cross-cutting: game-state stack (Title/Field/Battle/Menu), SDL2 port for Linux/S
 ## Placeholders currently in the code
 - Enemies are still 2D field sprites in battle (partner is 3D).
 - Battle numbers (HP, damage, MP, cooldowns) are first-pass tuning in `src/game/battle.cpp`.
-- Only S200 (hand-traced) and S400 (colour-classified) have authored walls; other maps use automatic walls.
+- Asuka City = S200 (start, centre) + S202 (south park) + S218 (north-east gate); night versions S201/S203/S219.
+  All three use `walls original` (decoded walk map). NPC positions/sprites come from the decoded event actors;
+  their lines are our own. Exit rectangles sit on decoded trigger zones but the targets are hand-linked.
+  The Black Agumon fight NPC near the west exit is hand-placed (owner design: one fight at most in town).
+- Stages without a .stage file use the decoded walk map (or automatic walls if a stage has none), the decoded spawn and the decoded actors as silent talk NPCs.
+- Door triggers in Asuka City (shops, houses) are not linked yet: their interior stages are unknown.

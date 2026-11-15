@@ -19,6 +19,7 @@ dumps/
 
 # Build artifacts
 /build/
+/build-city/
 /dist/
 /out/
 .vs/

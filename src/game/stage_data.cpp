@@ -105,7 +105,8 @@ bool loadStageData(const std::filesystem::path& p, StageData& d, std::string& er
             else n.level = toInt(t, 7, 1);
             d.npcs.push_back(n);
         } else if (k == "item" && t.size() >= 4) d.items.push_back({t[1], toInt(t, 2, 0), toInt(t, 3, 0)});
-        else if (k == "walls") wallRow = 0;
+        else if (k == "walls" && t.size() > 1 && t[1] == "original") d.originalWalls = true;
+        else if (k == "walls") { wallRow = 0; d.hasWallGrid = true; }
     }
     d.fromFile = true;
     return true;
@@ -121,6 +122,7 @@ bool saveStageData(const std::filesystem::path& p, const StageData& d) {
     f << "# npc   talk  SPRITE x y dir \"Name\" \"Line one|Line two\"\n";
     f << "# npc   fight|boss SPRITE x y dir \"Name\" level\n";
     f << "# item  sword x y\n";
+    f << "# walls original = walls from the game's own walk map (DAT/FIELD/STAGE/S###TMPK.BIN)\n";
     f << "cell " << d.cell << "\nsize " << d.cols << ' ' << d.rows << "\n";
     if (d.spawnX >= 0) f << "spawn " << d.spawnX << ' ' << d.spawnY << "\n";
     for (auto& e : d.exits) {
@@ -135,6 +137,10 @@ bool saveStageData(const std::filesystem::path& p, const StageData& d) {
         else f << n.level << "\n";
     }
     for (auto& it : d.items) f << "item " << it.id << ' ' << it.x << ' ' << it.y << "\n";
+    if (d.originalWalls) {  // walls are rebuilt from the game's walk map (TMPK) at load time
+        f << "walls original\n";
+        return bool(f);
+    }
     f << "walls\n";
     for (int y = 0; y < d.rows; ++y) {
         std::string row(size_t(d.cols), '.');

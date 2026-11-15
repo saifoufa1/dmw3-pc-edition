@@ -19,6 +19,8 @@ add_library(dw3formats STATIC
   src/formats/rlen.cpp
   src/formats/sprite_pack.cpp
   src/formats/stage_pack.cpp
+  src/formats/field_stage.cpp
+  src/formats/stage_overlay.cpp
   src/formats/model.cpp)
 target_include_directories(dw3formats PUBLIC src)
 

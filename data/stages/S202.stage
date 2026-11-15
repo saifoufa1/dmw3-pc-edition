@@ -1,0 +1,22 @@
+# DMW3 PC Edition stage data v1 (edit in-game with F2, or by hand)
+# exit  x y w h TARGET [arriveX arriveY]
+# npc   talk  SPRITE x y dir "Name" "Line one|Line two"
+# npc   fight|boss SPRITE x y dir "Name" level
+# walls original = walls from the game's own walk map (DAT/FIELD/STAGE/S###TMPK.BIN)
+#
+# ASUKA CITY - south park (S202 = city pixels offset by +256,+512 from S200).
+# exits = decoded trigger zones 0x60/0x61/0x62 (stairs up); their target (S200) is hand-picked.
+# npc positions/sprites: decoded event actors of WSTAG202 (most common variant per slot); lines are ours.
+spawn 236 282
+exit 200 239 57 33 S200 432 680
+exit 352 197 40 23 S200 566 613
+exit 465 141 39 23 S200 678 557
+npc talk P047LEOM 576 160 1 "Leomon" "The great tree has stood here since the server began."
+npc talk P051PANG 494 187 5 "Panjyamon" "Cold today, isn't it?"
+npc talk P057AOAB 680 380 1 "Guard" "The south bridge is closed to tamers for now."
+npc talk P058AOAC 648 396 5 "Guard" "Stay on the paths, please."
+npc talk P061AOAF 512 424 5 "Guard" "Nice day for a walk in the park."
+npc talk P178NBEA 534 435 5 "Bearmon" "I love sleeping under the big tree."
+npc talk P024RDST 864 249 1 "Tamer" "I am waiting for my friend to log in."
+npc talk P113WARU 208 344 5 "WaruMonzaemon" "Hmph. What are you looking at?"
+walls original
