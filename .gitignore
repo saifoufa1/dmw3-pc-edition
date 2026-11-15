@@ -1,0 +1,27 @@
+# ---- Copyrighted game data: NEVER commit ----
+/game_data/
+DAT/
+PRO/
+STR/
+*.BIN
+*.bin
+*.PRO
+*.STR
+*.cue
+*.iso
+*.img
+AAA/
+
+# Extracted / generated assets
+*.bmp
+*.wav
+dumps/
+
+# Build artifacts
+/build/
+/dist/
+/out/
+.vs/
+*.obj
+*.pdb
+*.ilk
