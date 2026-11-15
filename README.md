@@ -4,22 +4,39 @@ A native C++ engine that runs **Digimon World 3** (PlayStation, 2002) on PC by r
 
 > ⚠️ This repository contains **no game assets**. You must own the original disc and extract its files yourself. Digimon is a trademark of Bandai Namco; this is an unofficial, non-commercial fan project.
 
-## Status: v0.0.1 demo (field exploration)
-- ✅ Pre-rendered field maps decoded from `DAT/Z_STAGE` (all 237 stages)
-- ✅ Character sprites + animation scripts from `DAT/FIELD/SPRT` (all 179 packs)
-- ✅ Walk / run in 8 directions with the tamer, partner Digimon follows you
-- ✅ Keyboard + Xbox-style gamepad, pixel-perfect scaling, resizable window
-- ⏳ Collision/depth masks, NPCs, stage exits, battles, audio — see [docs/ROADMAP.md](docs/ROADMAP.md)
+## Status: v0.0.2 demo (field + walls + travel + real-time battle)
+- ✅ Pre-rendered field maps (all 237 stages) and character sprites (all 179 packs) decoded from your disc
+- ✅ Walls/collision, exits between maps (S200 town ⇄ S400 forest), placed NPCs: **talk** and **fight/boss** (touch to fight)
+- ✅ Real-time battle: partner moves freely, 3 attack buttons + guard, DV gauge → digivolve (each stage is bigger: ×1.0 / ×1.45 / ×1.9 / ×2.4)
+- ✅ Equipment: pick up the **sword**, it is drawn in Agumon's hand and turns the melee attack into a sword slash
+- ✅ In-game stage editor (F2): paint walls, draw exits, place NPCs/items, set spawn → saved to `data/stages/*.stage`
+- ⏳ Real digivolved sprites/3D models, original NPC/exit data, audio, menus — see [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ## Controls
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Move | Arrows / WASD | D-pad / left stick |
-| Run | Shift | A |
-| Previous / next stage | PgUp / PgDn (Q / E) | LB / RB |
-| Change partner | Tab | Y |
-| Toggle HUD | F1 | Back |
-| Quit | Esc | — |
+| Move / run | WASD or arrows / hold Shift | Left stick or D-pad / A |
+| Talk, continue | Space / Enter | X |
+| Equip / unequip sword | R | Start |
+| **Battle:** attack 1 / 2 / 3 | J / K / L (or 1 / 2 / 3) | X / B / Y |
+| **Battle:** guard (hold) | Space (or 4) | LB |
+| **Battle:** digivolve (DV gauge full) | U (or 5) | RB |
+| Browse stages (debug) | PgUp / PgDn | LB / RB |
+| Stage editor | F2 (then 1-5 tools, Ctrl+S save) | — |
+| HUD / quit | F1 / Esc | Back |
+
+## Stage data (our own game design)
+Each map's gameplay lives in `data/stages/<Stage>.stage` — plain text we own and can change freely:
+```
+spawn 300 640
+exit 0 792 18 64 S400 205 862                 # rect -> target stage + arrival point
+npc talk P011MINO 330 600 0 "Mina" "Line one|Line two"
+npc fight P171BAGM 610 482 7 "Black Agumon" 3  # touch it to fight
+npc boss P123DIGM 960 252 0 "Digmon" 8
+item sword 430 600
+walls                                          # 8x8 px grid: '#' wall, '.' floor
+```
+Maps without a file get automatic walls (background holes) — open the editor with **F2** to author them.
 
 ## Setup
 1. Copy the disc's `DAT`, `PRO` and `STR` folders into a folder named `game_data` next to (or any parent folder of) the repo/exe. Or set `DW3_DATA=<folder>`, or pass `--data <folder>`.
@@ -27,7 +44,7 @@ A native C++ engine that runs **Digimon World 3** (PlayStation, 2002) on PC by r
    ```
    build.bat
    ```
-3. Run `build\dmw3.exe` (optional: `--stage S400`).
+3. Run `build\dmw3.exe` (optional: `--stage S400`, or test a fight directly: `--battle --sword`, `--boss P123DIGM`).
 
 `build\dw3check.exe` validates your data and all parsers; `--dump-stage S200 out.bmp` / `--dump-sprite P006AGUM out.bmp` render assets for inspection.
 

@@ -3,6 +3,16 @@
 ## v0.0.1 — Field demo ✅ (this build)
 Real field maps + sprites from the player's data, walk/run, partner follow, stage browser, gamepad.
 
+## v0.0.2 — Gameplay prototype ✅
+Own stage data + editor (walls, exits, NPCs, items, spawn), S200⇄S400 travel, talk/fight/boss NPCs,
+real-time battle (3 attacks + guard + DV gauge, 4 digivolve stages with growing size), sword equipment.
+
+### Design decisions (owner)
+- No random encounters: NPCs are placed on the map. Talk NPCs talk, fight/boss NPCs start a battle on touch.
+- Battles are real-time like Digimon World 1, but with direct buttons for the partner's attacks; the player decides when to digivolve.
+- Equipment is visible on the partner and changes its attacks (sword first).
+- Each digivolution stage is bigger on screen.
+
 ## v0.01 — First launch (proposal, to discuss)
 Goal: "the first hour of DW3 plays on PC natively".
 
@@ -19,6 +29,7 @@ Goal: "the first hour of DW3 plays on PC natively".
 Cross-cutting: game-state stack (Title/Field/Battle/Menu), SDL2 port for Linux/Steam Deck after v0.01.
 
 ## Placeholders currently in the code
-- Collision = "stand on non-transparent background pixel" (`Field::walkable`).
-- Spawn = nearest walkable spot to the map centre.
-- Partner roster = fixed list of rookie sprite ids.
+- Digivolved forms = scaled + tinted rookie sprite (until Greymon-line sprites/3D models from DAT/MODEL are decoded).
+- Battle numbers (HP, damage, MP, cooldowns) are first-pass tuning in `src/game/battle.cpp`.
+- Only S200 (hand-traced) and S400 (colour-classified) have authored walls; other maps use automatic walls.
+- Sword art is drawn in code (project-made), not from the game.

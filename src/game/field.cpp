@@ -1,4 +1,4 @@
-#include "game/field.h"
+﻿#include "game/field.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,96 +13,43 @@ namespace dw3 {
 namespace {
 constexpr float kWalkSpeed = 1.25f;  // map px per tick (60 Hz)
 constexpr float kRunSpeed = 2.5f;
-constexpr size_t kTrailGap = 22;     // how far behind the partner walks (in trail samples)
+constexpr size_t kTrailGap = 22;  // how far behind the partner walks (in trail samples)
+constexpr int kFadeTicks = 20;
+constexpr float kTalkRange = 28.f, kTouchRange = 15.f, kItemRange = 14.f;
 
-// Sprite anim slot for (move, dir): 5 stored directions per move type.
-int animSlot(Move m, Dir d, bool& mirror) {
-    int di = int(d);
-    mirror = di > int(N);
-    if (mirror) di = 8 - di;  // NW->NE, W->E, SW->SE
-    return int(m) * 5 + di;
-}
+float dist(float ax, float ay, float bx, float by) { return std::sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by)); }
 
-Dir dirFromVector(float dx, float dy) {
-    // Screen-space angle, 0 = east, counter-clockwise with y pointing down.
-    float a = std::atan2(-dy, dx);
-    int oct = int(std::lround(a / (3.14159265f / 4))) & 7;  // 0=E,1=NE,2=N,3=NW,4=W,5=SW,6=S,7=SE
-    static const Dir map[8] = {E, NE, N, NW, W, SW, S, SE};
-    return map[oct];
-}
+// Win32 virtual-key codes used by the editor.
+enum : int { VK_CTRL = 0x11, VK_LBRACKET = 0xDB, VK_RBRACKET = 0xDD, VK_COMMA = 0xBC, VK_PERIOD = 0xBE };
 }  // namespace
-
-SpriteSet::~SpriteSet() {
-    for (auto& t : tex) gfx::destroy(t);
-}
-
-void Actor::tick() {
-    if (!sprite) return;
-    bool mirror;
-    int slot = animSlot(move, dir, mirror);
-    if (slot >= int(sprite->pack.anims.size()) || sprite->pack.anims[slot].keys.empty()) return;
-    if (slot != anim) {
-        anim = slot;
-        key = 0;
-        timer = 0;
-    }
-    const Anim& a = sprite->pack.anims[anim];
-    if (++timer >= a.keys[key].duration) {
-        timer = 0;
-        if (++key >= int(a.keys.size())) key = a.loop ? 0 : int(a.keys.size()) - 1;
-    }
-}
-
-void Actor::draw(float camX, float camY) const {
-    if (!sprite || anim < 0) return;
-    bool mirror;
-    animSlot(move, dir, mirror);
-    const AnimKey& k = sprite->pack.anims[anim].keys[key];
-    const Texture& t = sprite->tex[k.frame];
-    float sx = x - camX, sy = y - camY;
-    float dx = mirror ? sx - k.ox - t.w : sx + k.ox;
-    gfx::fillRect(sx - 7, sy - 2, 14, 4, 0x50000000u);  // soft ground shadow
-    gfx::drawTexture(t, dx, sy + k.oy, mirror);
-}
 
 Field::~Field() { gfx::destroy(stageTex_); }
 
-std::shared_ptr<SpriteSet> Field::loadSprite(const std::string& id, std::string& err) {
-    Bytes b;
-    if (!readFile(root_ / "DAT" / "FIELD" / "SPRT" / (id + ".BIN"), b)) {
-        err = "missing sprite " + id;
-        return nullptr;
-    }
-    auto s = std::make_shared<SpriteSet>();
-    s->name = id;
-    if (!loadSpritePack(b, s->pack, &err)) { err = id + ": " + err; return nullptr; }
-    if (s->pack.anims.size() < 15) { err = id + ": no movement animations"; return nullptr; }
-    for (auto& f : s->pack.frames) s->tex.push_back(gfx::upload(f));
-    return s;
-}
-
-bool Field::init(const fs::path& dataRoot, const std::string& startStage, std::string& err) {
+bool Field::init(const fs::path& dataRoot, const fs::path& stageDir, const std::string& startStage, std::string& err) {
     root_ = dataRoot;
+    stageDir_ = stageDir;
+    sprites_.setRoot(root_);
     for (auto& e : fs::directory_iterator(root_ / "DAT" / "Z_STAGE")) {
         std::string n = e.path().filename().string();  // S200PACK.BIN
         if (n.size() == 12 && n[0] == 'S' && n.substr(4) == "PACK.BIN") stageIds_.push_back(n.substr(0, 4));
     }
     std::sort(stageIds_.begin(), stageIds_.end());
     if (stageIds_.empty()) { err = "no stages in DAT/Z_STAGE"; return false; }
+    npcSprites_ = sprites_.listMovable();
 
-    // Partner roster: the playable rookies' field sprites.
-    for (const char* id : {"P006AGUM", "P003PKEN", "P004KOGU", "P005KOET", "P007VMON", "P009RENA", "P008GIRU"})
-        if (fs::exists(root_ / "DAT" / "FIELD" / "SPRT" / (std::string(id) + ".BIN"))) partnerIds_.push_back(id);
-
-    player_.sprite = loadSprite("P001PLAY", err);
+    player_.sprite = sprites_.get("P001PLAY", &err);
     if (!player_.sprite) return false;
-    if (!partnerIds_.empty()) partner_.sprite = loadSprite(partnerIds_[0], err);
+    partner_.sprite = sprites_.get(party_.partnerId, &err);
+    if (!partner_.sprite) return false;
 
     auto it = std::find(stageIds_.begin(), stageIds_.end(), startStage);
     return loadStage(it != stageIds_.end() ? size_t(it - stageIds_.begin()) : 0, err);
 }
 
-bool Field::loadStage(size_t index, std::string& err) {
+std::string Field::stageFile() const { return (stageDir_ / (stageIds_[stageIndex_] + ".stage")).string(); }
+std::string Field::npcKey(size_t i) const { return stageIds_[stageIndex_] + "#" + std::to_string(i); }
+
+bool Field::loadStage(size_t index, std::string& err, int arriveX, int arriveY) {
     Bytes b;
     StageMap m;
     const std::string& id = stageIds_[index];
@@ -114,85 +61,187 @@ bool Field::loadStage(size_t index, std::string& err) {
     stage_ = std::move(m);
     stageTex_ = gfx::upload(stage_.image);
     stageIndex_ = index;
-    spawn();
-    status_ = "Stage " + id;
-    statusTimer_ = 120;
+
+    std::string e;
+    data_ = {};
+    bool haveFile = fs::exists(stageDir_ / (id + ".stage")) && loadStageData(stageDir_ / (id + ".stage"), data_, e);
+    const int wantCols = (stage_.image.w + data_.cell - 1) / data_.cell, wantRows = (stage_.image.h + data_.cell - 1) / data_.cell;
+    if (!haveFile || data_.cols != wantCols || data_.rows != wantRows) {
+        auto keep = data_;
+        data_.resize(stage_.image.w, stage_.image.h);
+        data_.autoWalls(stage_.image);  // default: background holes are walls
+        if (haveFile) { data_.exits = keep.exits; data_.npcs = keep.npcs; data_.items = keep.items; data_.spawnX = keep.spawnX; data_.spawnY = keep.spawnY; }
+    }
+    buildNpcs();
+
+    float sx, sy;
+    if (arriveX >= 0) { sx = float(arriveX); sy = float(arriveY); }
+    else if (data_.spawnX >= 0) { sx = float(data_.spawnX); sy = float(data_.spawnY); }
+    else findAutoSpawn(sx, sy);
+    placeParty(sx, sy);
+    talkNpc_ = -1;
+    status_ = "Stage " + id + (haveFile ? "" : "  (no stage data yet: auto walls - press F2 to edit)");
+    statusTimer_ = 150;
     return true;
 }
 
-bool Field::walkable(float x, float y) const {
-    // Placeholder collision until the MASK/attribute format is decoded:
-    // the feet (and a little to each side) must stand on drawn background.
-    const int ix = int(x), iy = int(y);
-    return stage_.image.opaque(ix, iy) && stage_.image.opaque(ix - 5, iy) && stage_.image.opaque(ix + 5, iy) &&
-           stage_.image.opaque(ix, iy - 3);
+void Field::buildNpcs() {
+    npcs_.clear();
+    for (size_t i = 0; i < data_.npcs.size(); ++i) {
+        NpcRt n;
+        n.def = data_.npcs[i];
+        n.actor.sprite = sprites_.get(n.def.sprite);
+        n.actor.x = float(n.def.x);
+        n.actor.y = float(n.def.y);
+        n.actor.dir = Dir(n.def.dir & 7);
+        n.defeated = defeated_.count(stageIds_[stageIndex_] + "#" + std::to_string(i)) > 0;
+        npcs_.push_back(std::move(n));
+    }
 }
 
-void Field::spawn() {
+bool Field::walkable(float x, float y) const {
+    if (editor_) return stage_.image.inside(int(x), int(y));
+    const int ix = int(x), iy = int(y);
+    if (data_.isWall(ix, iy) || data_.isWall(ix - 4, iy) || data_.isWall(ix + 4, iy) || data_.isWall(ix, iy - 2))
+        return false;
+    for (const auto& n : npcs_)  // talk NPCs are solid
+        if (!n.defeated && n.def.kind == NpcKind::Talk && dist(x, y, n.actor.x, n.actor.y) < 9.f) return false;
+    return true;
+}
+
+void Field::findAutoSpawn(float& outX, float& outY) const {
     const int cx = stage_.image.w / 2, cy = stage_.image.h / 2;
-    float bx = float(cx), by = float(cy);
-    // Spiral outwards from the centre for the first walkable spot.
-    for (int r = 0; r < std::max(stage_.image.w, stage_.image.h); r += 4) {
-        bool found = false;
-        for (int a = 0; a < 32 && !found; ++a) {
+    outX = float(cx);
+    outY = float(cy);
+    for (int r = 0; r < std::max(stage_.image.w, stage_.image.h); r += 4)
+        for (int a = 0; a < 32; ++a) {
             float px = cx + r * std::cos(a * 0.19635f), py = cy + r * std::sin(a * 0.19635f);
-            if (walkable(px, py) && walkable(px + 12, py + 6)) { bx = px; by = py; found = true; }
+            if (walkable(px, py) && walkable(px + 12, py + 6)) { outX = px; outY = py; return; }
         }
-        if (found) break;
-    }
-    player_.x = bx; player_.y = by; player_.dir = S; player_.move = Move::Idle;
-    partner_.x = bx + 12; partner_.y = by + 6; partner_.dir = S; partner_.move = Move::Idle;
+}
+
+void Field::placeParty(float x, float y) {
+    player_.x = x; player_.y = y; player_.move = Move::Idle;
+    partner_.x = x + 12; partner_.y = y + 6; partner_.move = Move::Idle;
+    if (!walkable(partner_.x, partner_.y)) { partner_.x = x; partner_.y = y; }
     trail_.clear();
+    player_.tick();
+    partner_.tick();
+    updateCamera();
+}
+
+std::optional<BattleRequest> Field::takeBattleRequest() {
+    auto r = battle_;
+    battle_.reset();
+    return r;
+}
+
+void Field::endBattle(bool won) {
+    if (battleNpc_ >= 0 && battleNpc_ < int(npcs_.size())) {
+        if (won) {
+            npcs_[battleNpc_].defeated = true;
+            defeated_.insert(npcKey(size_t(battleNpc_)));
+            status_ = "Victory! " + npcs_[battleNpc_].def.name + " was defeated.";
+        } else {
+            status_ = "You were defeated... back to the start point.";
+            float sx, sy;
+            if (data_.spawnX >= 0) { sx = float(data_.spawnX); sy = float(data_.spawnY); } else findAutoSpawn(sx, sy);
+            placeParty(sx, sy);
+        }
+        statusTimer_ = 180;
+    }
+    battleNpc_ = -1;
+    touchCooldown_ = 60;
 }
 
 void Field::updatePartner(float speed) {
-    if (!partner_.sprite) return;
-    if (trail_.size() <= kTrailGap) {
-        partner_.move = Move::Idle;
-        return;
-    }
+    if (trail_.size() <= kTrailGap) { partner_.move = Move::Idle; return; }
     auto [tx, ty] = trail_[trail_.size() - 1 - kTrailGap];
     float dx = tx - partner_.x, dy = ty - partner_.y;
-    float dist = std::sqrt(dx * dx + dy * dy);
-    if (dist < 1.0f) {
-        partner_.move = Move::Idle;
-        return;
-    }
-    float step = std::min(dist, std::max(speed, dist * 0.25f));
-    partner_.x += dx / dist * step;
-    partner_.y += dy / dist * step;
+    float d = std::sqrt(dx * dx + dy * dy);
+    if (d < 1.0f) { partner_.move = Move::Idle; return; }
+    float step = std::min(d, std::max(speed, d * 0.25f));
+    partner_.x += dx / d * step;
+    partner_.y += dy / d * step;
     partner_.dir = dirFromVector(dx, dy);
     partner_.move = step > kWalkSpeed * 1.4f ? Move::Run : Move::Walk;
+}
+
+void Field::updateCamera() {
+    auto clampCam = [](float c, int view, int size) {
+        if (size <= view) return -float(view - size) / 2;
+        return std::clamp(c, 0.f, float(size - view));
+    };
+    camX_ = clampCam(player_.x - kScreenW / 2.f, kScreenW, stage_.image.w);
+    camY_ = clampCam(player_.y - kScreenH / 2.f - 16, kScreenH, stage_.image.h);
 }
 
 void Field::update(const Input& in) {
     ++ticks_;
     if (statusTimer_ > 0) --statusTimer_;
+    if (touchCooldown_ > 0) --touchCooldown_;
     std::string err;
-    if (in.toggleHud) hud_ = !hud_;
-    if (in.nextStage || in.prevStage) {
-        size_t n = stageIds_.size();
-        size_t idx = in.nextStage ? (stageIndex_ + 1) % n : (stageIndex_ + n - 1) % n;
-        // Skip packs that fail to load rather than getting stuck.
-        for (size_t tries = 0; tries < n && !loadStage(idx, err); ++tries)
-            idx = in.nextStage ? (idx + 1) % n : (idx + n - 1) % n;
-    }
-    if (in.nextPartner && partnerIds_.size() > 1) {
-        partnerIndex_ = (partnerIndex_ + 1) % partnerIds_.size();
-        if (auto s = loadSprite(partnerIds_[partnerIndex_], err)) {
-            partner_.sprite = s;
-            partner_.anim = -1;
-            status_ = "Partner " + s->name.substr(4);
-            statusTimer_ = 120;
-        }
+    if (in.hudP) hud_ = !hud_;
+    if (in.editorP) {
+        editor_ = !editor_;
+        status_ = editor_ ? "EDITOR ON (F2 to leave, Ctrl+S to save)" : "Editor off";
+        statusTimer_ = 120;
     }
 
+    // ---- stage transition fade ----
+    if (fade_ > 0) {
+        if (fadingOut_) {
+            if (++fade_ >= kFadeTicks) {
+                auto it = std::find(stageIds_.begin(), stageIds_.end(), pendingExit_.target);
+                if (it != stageIds_.end() && loadStage(size_t(it - stageIds_.begin()), err, pendingExit_.arriveX, pendingExit_.arriveY)) {}
+                fadingOut_ = false;
+                fade_ = kFadeTicks;
+            }
+        } else {
+            --fade_;
+        }
+        player_.move = partner_.move = Move::Idle;
+        player_.tick();
+        partner_.tick();
+        return;
+    }
+
+    if (in.nextStageP || in.prevStageP) {
+        size_t n = stageIds_.size();
+        size_t idx = in.nextStageP ? (stageIndex_ + 1) % n : (stageIndex_ + n - 1) % n;
+        for (size_t tries = 0; tries < n && !loadStage(idx, err); ++tries)
+            idx = in.nextStageP ? (idx + 1) % n : (idx + n - 1) % n;
+    }
+    if (in.equipP) {
+        if (party_.hasSword) {
+            party_.swordEquipped = !party_.swordEquipped;
+            status_ = party_.swordEquipped ? party_.partnerName + " equipped the SWORD" : "Sword unequipped";
+        } else {
+            status_ = "No weapon yet - find the sword on the map";
+        }
+        statusTimer_ = 120;
+    }
+
+    // ---- dialogue ----
+    if (talkNpc_ >= 0) {
+        if (in.confirmP) {
+            if (++talkPage_ >= talkPages_.size()) talkNpc_ = -1;
+        }
+        player_.move = partner_.move = Move::Idle;
+        player_.tick();
+        partner_.tick();
+        for (auto& n : npcs_) n.actor.tick();
+        return;
+    }
+
+    if (editor_) updateEditor(in);
+
+    // ---- player movement ----
     float ix = float(in.right) - float(in.left), iy = float(in.down) - float(in.up);
-    const float speed = in.run ? kRunSpeed : kWalkSpeed;
+    const float speed = (editor_ ? 2.f : 1.f) * (in.run ? kRunSpeed : kWalkSpeed);
     if (ix != 0 || iy != 0) {
         player_.dir = dirFromVector(ix, iy);
-        // Isometric feel: diagonals travel 2:1 like the pre-rendered floor grid.
-        float vx = ix, vy = (ix != 0 && iy != 0) ? iy * 0.5f : iy;
+        float vx = ix, vy = (ix != 0 && iy != 0) ? iy * 0.5f : iy;  // 2:1 isometric diagonals
         float len = std::sqrt(vx * vx + vy * vy);
         vx = vx / len * speed;
         vy = vy / len * speed;
@@ -212,36 +261,293 @@ void Field::update(const Input& in) {
     updatePartner(speed);
     player_.tick();
     partner_.tick();
+    for (auto& n : npcs_) n.actor.tick();
 
-    // Camera follows the player, clamped to the map (centred if the map is smaller than the screen).
-    auto clampCam = [](float c, int view, int size) {
-        if (size <= view) return -float(view - size) / 2;
-        return std::clamp(c, 0.f, float(size - view));
-    };
-    camX_ = clampCam(player_.x - kScreenW / 2.f, kScreenW, stage_.image.w);
-    camY_ = clampCam(player_.y - kScreenH / 2.f - 16, kScreenH, stage_.image.h);
+    if (!editor_) {
+        // ---- talk ----
+        if (in.confirmP) {
+            int best = -1;
+            float bestD = kTalkRange;
+            for (size_t i = 0; i < npcs_.size(); ++i) {
+                const auto& n = npcs_[i];
+                if (n.defeated || n.def.kind != NpcKind::Talk) continue;
+                float d = dist(player_.x, player_.y, n.actor.x, n.actor.y);
+                if (d < bestD) { bestD = d; best = int(i); }
+            }
+            if (best >= 0) {
+                talkNpc_ = best;
+                talkPage_ = 0;
+                talkPages_.clear();
+                std::string t = npcs_[best].def.text;
+                size_t p;
+                while ((p = t.find('|')) != std::string::npos) { talkPages_.push_back(t.substr(0, p)); t.erase(0, p + 1); }
+                talkPages_.push_back(t);
+                npcs_[best].actor.dir = dirFromVector(player_.x - npcs_[best].actor.x, player_.y - npcs_[best].actor.y);
+                player_.dir = dirFromVector(npcs_[best].actor.x - player_.x, npcs_[best].actor.y - player_.y);
+            }
+        }
+        // ---- touch a fighter -> battle ----
+        if (touchCooldown_ == 0 && !battle_) {
+            for (size_t i = 0; i < npcs_.size(); ++i) {
+                const auto& n = npcs_[i];
+                if (n.defeated || n.def.kind == NpcKind::Talk) continue;
+                float range = n.def.kind == NpcKind::Boss ? kTouchRange + 6 : kTouchRange;
+                if (dist(player_.x, player_.y, n.actor.x, n.actor.y) < range ||
+                    dist(partner_.x, partner_.y, n.actor.x, n.actor.y) < range) {
+                    battle_ = BattleRequest{n.def.sprite, n.def.name, n.def.level, n.def.kind == NpcKind::Boss};
+                    battleNpc_ = int(i);
+                    break;
+                }
+            }
+        }
+        // ---- items ----
+        for (size_t i = 0; i < data_.items.size(); ++i) {
+            std::string key = stageIds_[stageIndex_] + "#item" + std::to_string(i);
+            if (pickedUp_.count(key)) continue;
+            const auto& it = data_.items[i];
+            if (dist(player_.x, player_.y, float(it.x), float(it.y)) < kItemRange) {
+                pickedUp_.insert(key);
+                if (it.id == "sword") {
+                    party_.hasSword = true;
+                    party_.swordEquipped = true;
+                    status_ = "Got the SWORD! " + party_.partnerName + " equipped it.  [R] equip / unequip";
+                    statusTimer_ = 240;
+                }
+            }
+        }
+        // ---- exits ----
+        for (const auto& e : data_.exits) {
+            if (player_.x >= e.x && player_.x < e.x + e.w && player_.y >= e.y && player_.y < e.y + e.h) {
+                pendingExit_ = e;
+                fadingOut_ = true;
+                fade_ = 1;
+                break;
+            }
+        }
+    }
+    updateCamera();
 }
+
+// ------------------------------------------------------------------ editor
+
+void Field::updateEditor(const Input& in) {
+    mapMx_ = in.mx + camX_;
+    mapMy_ = in.my + camY_;
+    const bool ctrl = in.key[VK_CTRL];
+    if (in.keyP['1']) tool_ = Tool::Walls;
+    if (in.keyP['2']) tool_ = Tool::Exits;
+    if (in.keyP['3']) tool_ = Tool::Npcs;
+    if (in.keyP['4']) tool_ = Tool::Items;
+    if (in.keyP['5']) tool_ = Tool::Spawn;
+    if (in.keyP[VK_LBRACKET]) brush_ = std::max(0, brush_ - 1);
+    if (in.keyP[VK_RBRACKET]) brush_ = std::min(8, brush_ + 1);
+    const bool prev = in.keyP[VK_COMMA], next = in.keyP[VK_PERIOD];
+    if (tool_ == Tool::Exits && (prev || next)) {
+        size_t n = stageIds_.size();
+        editTarget_ = next ? (editTarget_ + 1) % n : (editTarget_ + n - 1) % n;
+    }
+    if (tool_ == Tool::Npcs && (prev || next) && !npcSprites_.empty()) {
+        size_t n = npcSprites_.size();
+        npcSprite_ = next ? (npcSprite_ + 1) % n : (npcSprite_ + n - 1) % n;
+    }
+    if (tool_ == Tool::Npcs && in.keyP['T'])
+        npcKind_ = npcKind_ == NpcKind::Talk ? NpcKind::Fight : npcKind_ == NpcKind::Fight ? NpcKind::Boss : NpcKind::Talk;
+    if (ctrl && in.keyP['G']) { data_.autoWalls(stage_.image); status_ = "Walls reset from background"; statusTimer_ = 120; }
+    if (ctrl && in.keyP['X']) { std::fill(data_.wall.begin(), data_.wall.end(), uint8_t(0)); status_ = "All walls cleared"; statusTimer_ = 120; }
+    if (ctrl && in.keyP['S']) {
+        bool ok = saveStageData(stageFile(), data_);
+        status_ = ok ? "Saved " + stageFile() : "SAVE FAILED: " + stageFile();
+        statusTimer_ = 180;
+    }
+    const bool onScreen = in.mx >= 0 && in.my >= 0 && in.mx < kScreenW && in.my < kScreenH;
+    if (!onScreen) return;
+    const int mx = int(mapMx_), my = int(mapMy_);
+
+    switch (tool_) {
+        case Tool::Walls:
+            if (in.lmb || in.rmb) {
+                int cx = mx / data_.cell, cy = my / data_.cell;
+                for (int y = cy - brush_; y <= cy + brush_; ++y)
+                    for (int x = cx - brush_; x <= cx + brush_; ++x) data_.setWallCell(x, y, in.lmb);
+            }
+            break;
+        case Tool::Exits:
+            if (in.lmbP) { dragging_ = true; dragX_ = mapMx_; dragY_ = mapMy_; }
+            if (dragging_ && in.lmbR) {
+                dragging_ = false;
+                int x0 = int(std::min(dragX_, mapMx_)), y0 = int(std::min(dragY_, mapMy_));
+                int w = int(std::fabs(mapMx_ - dragX_)), h = int(std::fabs(mapMy_ - dragY_));
+                if (w >= 4 && h >= 4) {
+                    data_.exits.push_back({x0, y0, w, h, stageIds_[editTarget_], -1, -1});
+                    status_ = "Exit -> " + stageIds_[editTarget_] + " (arrives at its spawn; edit arriveX/Y in the file)";
+                    statusTimer_ = 150;
+                }
+            }
+            if (in.rmbP)
+                for (size_t i = 0; i < data_.exits.size(); ++i) {
+                    const auto& e = data_.exits[i];
+                    if (mx >= e.x && mx < e.x + e.w && my >= e.y && my < e.y + e.h) { data_.exits.erase(data_.exits.begin() + i); break; }
+                }
+            break;
+        case Tool::Npcs:
+            if (in.lmbP && !npcSprites_.empty()) {
+                NpcDef n;
+                n.kind = npcKind_;
+                n.sprite = npcSprites_[npcSprite_];
+                n.x = mx; n.y = my; n.dir = int(S);
+                n.name = n.sprite.substr(4);
+                n.level = npcKind_ == NpcKind::Boss ? 8 : 3;
+                n.text = "Hello, tamer!|(Edit my lines in " + stageIds_[stageIndex_] + ".stage)";
+                data_.npcs.push_back(n);
+                buildNpcs();
+            }
+            if (in.rmbP) {
+                for (size_t i = 0; i < data_.npcs.size(); ++i)
+                    if (dist(float(mx), float(my), float(data_.npcs[i].x), float(data_.npcs[i].y)) < 16.f) {
+                        data_.npcs.erase(data_.npcs.begin() + i);
+                        buildNpcs();
+                        break;
+                    }
+            }
+            break;
+        case Tool::Items:
+            if (in.lmbP) data_.items.push_back({"sword", mx, my});
+            if (in.rmbP)
+                for (size_t i = 0; i < data_.items.size(); ++i)
+                    if (dist(float(mx), float(my), float(data_.items[i].x), float(data_.items[i].y)) < 16.f) {
+                        data_.items.erase(data_.items.begin() + i);
+                        break;
+                    }
+            break;
+        case Tool::Spawn:
+            if (in.lmbP) { data_.spawnX = mx; data_.spawnY = my; }
+            break;
+    }
+}
+
+void Field::renderEditor() {
+    // walls (only visible cells)
+    const int c = data_.cell;
+    const int x0 = std::max(0, int(camX_) / c), y0 = std::max(0, int(camY_) / c);
+    const int x1 = std::min(data_.cols, int(camX_ + kScreenW) / c + 1), y1 = std::min(data_.rows, int(camY_ + kScreenH) / c + 1);
+    for (int y = y0; y < y1; ++y)
+        for (int x = x0; x < x1; ++x)
+            if (data_.wall[size_t(y) * data_.cols + x]) gfx::fillRect(x * c - camX_, y * c - camY_, float(c), float(c), 0x600000ffu);
+    for (const auto& e : data_.exits) {
+        gfx::fillRect(e.x - camX_, e.y - camY_, float(e.w), float(e.h), 0x50ff8000u);
+        gfx::strokeRect(e.x - camX_, e.y - camY_, float(e.w), float(e.h), 0xffffc040u);
+    }
+    if (dragging_) gfx::strokeRect(std::min(dragX_, mapMx_) - camX_, std::min(dragY_, mapMy_) - camY_, std::fabs(mapMx_ - dragX_), std::fabs(mapMy_ - dragY_), 0xffffffffu);
+    if (data_.spawnX >= 0) {
+        gfx::fillRect(data_.spawnX - camX_ - 6, data_.spawnY - camY_, 13, 1, 0xff00ff00u);
+        gfx::fillRect(data_.spawnX - camX_, data_.spawnY - camY_ - 6, 1, 13, 0xff00ff00u);
+    }
+    if (tool_ == Tool::Walls && mapMx_ >= 0) {
+        int cx = int(mapMx_) / c, cy = int(mapMy_) / c;
+        gfx::strokeRect((cx - brush_) * c - camX_, (cy - brush_) * c - camY_, float((2 * brush_ + 1) * c), float((2 * brush_ + 1) * c), 0xffffffffu);
+    }
+}
+
+// ------------------------------------------------------------------ render
 
 void Field::render() {
     gfx::drawTexture(stageTex_, -camX_, -camY_);
-    // Painter's order by feet Y.
-    const Actor* order[2] = {&player_, &partner_};
-    if (partner_.y < player_.y) std::swap(order[0], order[1]);
-    for (const Actor* a : order) a->draw(camX_, camY_);
+
+    // items on the ground
+    for (size_t i = 0; i < data_.items.size(); ++i) {
+        if (pickedUp_.count(stageIds_[stageIndex_] + "#item" + std::to_string(i))) continue;
+        const auto& it = data_.items[i];
+        float bob = std::sin(ticks_ * 0.08f) * 2.f;
+        gfx::drawGlow(it.x - camX_, it.y - camY_ - 6, 12.f, rgba(255, 230, 120, 140));
+        gfx::drawRotated(swordTexture(), it.x - camX_, it.y - camY_ - 4 + bob, 3.5f, 19.f, 0.6f, 1.f, false, 0xffffffffu);
+    }
+
+    // painter's order by feet Y
+    struct Item { float y; int kind; size_t idx; };
+    std::vector<Item> order{{player_.y, 0, 0}, {partner_.y, 1, 0}};
+    for (size_t i = 0; i < npcs_.size(); ++i)
+        if (!npcs_[i].defeated) order.push_back({npcs_[i].actor.y, 2, i});
+    std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.y < b.y; });
+    const bool sword = party_.swordEquipped;
+    for (const auto& o : order) {
+        if (o.kind == 0) player_.draw(camX_, camY_);
+        else if (o.kind == 1) {
+            if (sword && swordBehindBody(partner_)) drawHeldSword(partner_, camX_, camY_, 1.f, -1.f);
+            partner_.draw(camX_, camY_);
+            if (sword && !swordBehindBody(partner_)) drawHeldSword(partner_, camX_, camY_, 1.f, -1.f);
+        } else {
+            const auto& n = npcs_[o.idx];
+            float scale = n.def.kind == NpcKind::Boss ? 1.35f : 1.f;
+            n.actor.draw(camX_, camY_, scale);
+            if (n.def.kind != NpcKind::Talk) {  // pulsing aura marks fighters
+                float p = 0.5f + 0.5f * std::sin(ticks_ * 0.1f);
+                gfx::drawGlow(n.actor.x - camX_, n.actor.y - camY_ - 2, 14.f * scale,
+                              n.def.kind == NpcKind::Boss ? rgba(255, 60, 60, uint8_t(60 + 60 * p)) : rgba(255, 140, 60, uint8_t(40 + 40 * p)));
+            }
+        }
+    }
+    if (editor_) renderEditor();
+
+    if (talkNpc_ >= 0) {
+        gfx::fillRect(12, 168, 296, 62, 0xd8301808u);
+        gfx::strokeRect(12, 168, 296, 62, 0xffc0e0ffu);
+    }
+    if (fade_ > 0) gfx::fillRect(0, 0, kScreenW, kScreenH, rgba(0, 0, 0, uint8_t(255 * fade_ / kFadeTicks)));
 }
 
 void Field::renderHud(int ww, int wh) {
-    char line[160];
-    if (hud_) {
-        std::snprintf(line, sizeof line, "DMW3 PC Edition v%s demo | Stage %s (%zu/%zu)  %dx%d  pos %d,%d",
-                      DMW3_VERSION, stageIds_[stageIndex_].c_str(), stageIndex_ + 1, stageIds_.size(),
-                      stage_.image.w, stage_.image.h, int(player_.x), int(player_.y));
-        gfx::drawText(10, 20, line);
-        gfx::drawText(10, wh - 12,
-                      "Move: Arrows/WASD/D-pad  Run: Shift/A  Stage: PgUp/PgDn or LB/RB  Partner: Tab/Y  HUD: F1  Quit: Esc",
-                      0xffb0e0ffu);
+    char line[256];
+    // NPC labels
+    for (const auto& n : npcs_) {
+        if (n.defeated && !editor_) continue;
+        int wx, wy;
+        float top = n.def.kind == NpcKind::Boss ? 52.f : 38.f;
+        gfx::toWindow(n.actor.x - camX_, n.actor.y - camY_ - top, wx, wy);
+        if (n.def.kind == NpcKind::Boss) gfx::drawTextCentered(wx, wy, ("BOSS " + n.def.name).c_str(), 0xff4040ffu);
+        else if (n.def.kind == NpcKind::Fight) gfx::drawTextCentered(wx, wy, ("! " + n.def.name).c_str(), 0xff40a0ffu);
+        else if (editor_ || dist(player_.x, player_.y, n.actor.x, n.actor.y) < kTalkRange * 1.6f)
+            gfx::drawTextCentered(wx, wy, editor_ ? n.def.name.c_str() : "[Space] Talk", 0xffffffffu);
     }
-    if (statusTimer_ > 0) gfx::drawText(ww / 2 - int(status_.size()) * 4, 46, status_.c_str(), 0xff60ffffu);
+    if (editor_)
+        for (const auto& e : data_.exits) {
+            int wx, wy;
+            gfx::toWindow(e.x - camX_ + e.w / 2.f, e.y - camY_ + e.h / 2.f, wx, wy);
+            gfx::drawTextCentered(wx, wy, ("-> " + e.target).c_str(), 0xff40ffffu);
+        }
+
+    if (hud_) {
+        std::snprintf(line, sizeof line, "DMW3 PC Edition v%s | Stage %s (%zu/%zu)  pos %d,%d  %s%s", DMW3_VERSION,
+                      stageIds_[stageIndex_].c_str(), stageIndex_ + 1, stageIds_.size(), int(player_.x), int(player_.y),
+                      party_.swordEquipped ? "[Sword]" : "", editor_ ? "  [EDITOR]" : "");
+        gfx::drawText(10, 20, line);
+        if (!editor_)
+            gfx::drawText(10, wh - 12,
+                          "Move: WASD/Arrows  Run: Shift  Talk: Space  Equip sword: R  Stage: PgUp/PgDn  Editor: F2  HUD: F1",
+                          0xffb0e0ffu);
+    }
+    if (editor_) {
+        static const char* names[] = {"1 WALLS: LMB paint, RMB erase, [ ] brush", "2 EXITS: drag LMB, RMB delete, , . target",
+                                      "3 NPCS: LMB place, RMB delete, , . sprite, T kind", "4 ITEMS: LMB sword, RMB delete",
+                                      "5 SPAWN: LMB set player start"};
+        int y = 44;
+        for (int i = 0; i < 5; ++i, y += 17) gfx::drawText(10, y, names[i], int(tool_) == i ? 0xff40ffffu : 0xffa0a0a0u);
+        if (tool_ == Tool::Exits) std::snprintf(line, sizeof line, "exit target: %s", stageIds_[editTarget_].c_str());
+        else if (tool_ == Tool::Npcs) std::snprintf(line, sizeof line, "npc: %s  kind: %s", npcSprites_.empty() ? "-" : npcSprites_[npcSprite_].c_str(), npcKindName(npcKind_));
+        else if (tool_ == Tool::Walls) std::snprintf(line, sizeof line, "brush %d   Ctrl+G auto walls  Ctrl+X clear", brush_ * 2 + 1);
+        else line[0] = 0;
+        gfx::drawText(10, y + 4, line, 0xffffffffu);
+        gfx::drawText(10, wh - 12, "EDITOR: Ctrl+S save  F2 exit  (walls ignored while editing)", 0xff40ffffu);
+    }
+    if (statusTimer_ > 0) gfx::drawTextCentered(ww / 2, 46 + (editor_ ? 110 : 0), status_.c_str(), 0xff60ffffu);
+
+    if (talkNpc_ >= 0) {
+        int x, y;
+        gfx::toWindow(20, 176, x, y);
+        gfx::drawText(x, y + 12, npcs_[talkNpc_].def.name.c_str(), 0xff40d0ffu);
+        gfx::drawText(x, y + 12 + 22, talkPages_[talkPage_].c_str(), 0xffffffffu);
+        gfx::toWindow(250, 222, x, y);
+        gfx::drawText(x, y, talkPage_ + 1 < talkPages_.size() ? "[Space] >" : "[Space] close", 0xffb0e0ffu);
+    }
 }
 
 }  // namespace dw3

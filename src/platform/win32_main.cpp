@@ -1,6 +1,7 @@
-// Win32 + OpenGL platform layer: window, input (keyboard + XInput), fixed 60 Hz loop.
+// Win32 + OpenGL platform layer: window, input (keyboard, mouse, XInput), fixed 60 Hz loop.
 // Command line:
-//   dmw3.exe [--data <dir>] [--stage S200] [--screenshot out.bmp --frames N] [--autowalk]
+//   dmw3.exe [--data <dir>] [--stage S200]
+//   testing: [--screenshot out.bmp --frames N] [--autowalk] [--battle] [--sword] [--autobattle]
 #include <windows.h>
 #include <shellapi.h>
 #include <GL/gl.h>
@@ -9,7 +10,7 @@
 #include <vector>
 
 #include "core/bytes.h"
-#include "game/field.h"
+#include "game/game.h"
 
 namespace fs = std::filesystem;
 using namespace dw3;
@@ -42,40 +43,61 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcA(h, msg, wp, lp);
 }
 
-struct Buttons {  // raw "held" state, edges computed per tick
-    bool up, down, left, right, run, next, prev, partner, hud, quit;
+// Held state of logical buttons; edges are computed against the previous tick.
+struct Held {
+    bool key[256];
+    bool up, down, left, right, run, confirm, atk1, atk2, atk3, guard, digivolve;
+    bool next, prev, partner, hud, editor, equip, quit, lmb, rmb;
 };
 
-Buttons pollButtons(bool focused) {
-    Buttons b{};
+Held poll(HWND hwnd, bool focused) {
+    Held h{};
     if (focused) {
-        auto k = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
-        b.up = k(VK_UP) || k('W');
-        b.down = k(VK_DOWN) || k('S');
-        b.left = k(VK_LEFT) || k('A');
-        b.right = k(VK_RIGHT) || k('D');
-        b.run = k(VK_SHIFT);
-        b.next = k(VK_NEXT) || k('E');
-        b.prev = k(VK_PRIOR) || k('Q');
-        b.partner = k(VK_TAB);
-        b.hud = k(VK_F1);
-        b.quit = k(VK_ESCAPE);
+        for (int vk = 1; vk < 256; ++vk) h.key[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+        auto k = [&](int vk) { return h.key[vk]; };
+        h.up = k(VK_UP) || k('W');
+        h.down = k(VK_DOWN) || k('S');
+        h.left = k(VK_LEFT) || k('A');
+        h.right = k(VK_RIGHT) || k('D');
+        h.run = k(VK_SHIFT);
+        h.confirm = k(VK_SPACE) || k(VK_RETURN);
+        h.atk1 = k('J') || k('1');
+        h.atk2 = k('K') || k('2');
+        h.atk3 = k('L') || k('3');
+        h.guard = k(VK_SPACE) || k('4');
+        h.digivolve = k('U') || k('5');
+        h.next = k(VK_NEXT) || k('E');
+        h.prev = k(VK_PRIOR) || k('Q');
+        h.partner = k(VK_TAB);
+        h.hud = k(VK_F1);
+        h.editor = k(VK_F2);
+        h.equip = k('R');
+        h.quit = k(VK_ESCAPE);
+        h.lmb = k(VK_LBUTTON);
+        h.rmb = k(VK_RBUTTON);
     }
+    (void)hwnd;
     XState xs{};
     if (g_xinput && g_xinput(0, &xs) == 0) {
         const WORD w = xs.pad.buttons;
         const int dz = 12000;
-        b.up |= (w & 0x0001) || xs.pad.ly > dz;
-        b.down |= (w & 0x0002) || xs.pad.ly < -dz;
-        b.left |= (w & 0x0004) || xs.pad.lx < -dz;
-        b.right |= (w & 0x0008) || xs.pad.lx > dz;
-        b.run |= (w & 0x1000) != 0;      // A
-        b.prev |= (w & 0x0100) != 0;     // LB
-        b.next |= (w & 0x0200) != 0;     // RB
-        b.partner |= (w & 0x8000) != 0;  // Y
-        b.hud |= (w & 0x0020) != 0;      // Back
+        h.up |= (w & 0x0001) || xs.pad.ly > dz;
+        h.down |= (w & 0x0002) || xs.pad.ly < -dz;
+        h.left |= (w & 0x0004) || xs.pad.lx < -dz;
+        h.right |= (w & 0x0008) || xs.pad.lx > dz;
+        h.run |= (w & 0x1000) != 0;                // A
+        h.confirm |= (w & 0x4000) != 0;            // X
+        h.atk1 |= (w & 0x4000) != 0;               // X
+        h.atk2 |= (w & 0x2000) != 0;               // B
+        h.atk3 |= (w & 0x8000) != 0;               // Y
+        h.guard |= (w & 0x0100) != 0;              // LB
+        h.prev |= (w & 0x0100) != 0;
+        h.digivolve |= (w & 0x0200) != 0;          // RB
+        h.next |= (w & 0x0200) != 0;
+        h.hud |= (w & 0x0020) != 0;                // Back
+        h.equip |= (w & 0x0010) != 0;              // Start
     }
-    return b;
+    return h;
 }
 
 bool saveScreenshot(const fs::path& p) {
@@ -104,12 +126,26 @@ std::vector<std::string> args() {
     return out;
 }
 
+// Our own project data (stage files) lives in <repo>/data/stages; find it by walking up from the exe.
+fs::path findStageDir(const fs::path& exeDir) {
+    std::error_code ec;
+    fs::path p = exeDir;
+    for (int i = 0; i < 5 && !p.empty(); ++i) {
+        if (fs::is_directory(p / "data" / "stages", ec)) return p / "data" / "stages";
+        fs::path parent = p.parent_path();
+        if (parent == p) break;
+        p = parent;
+    }
+    return exeDir / "data" / "stages";
+}
+
 }  // namespace
 
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     std::string dataArg, stage = "S200", shotPath;
     int shotFrames = 0;
-    bool autowalk = false;
+    bool autowalk = false, autobattle = false;
+    DebugOptions dbg;
     auto a = args();
     for (size_t i = 0; i < a.size(); ++i) {
         if (a[i] == "--data" && i + 1 < a.size()) dataArg = a[++i];
@@ -117,12 +153,17 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--screenshot" && i + 1 < a.size()) shotPath = a[++i];
         else if (a[i] == "--frames" && i + 1 < a.size()) shotFrames = std::stoi(a[++i]);
         else if (a[i] == "--autowalk") autowalk = true;
+        else if (a[i] == "--autobattle") autobattle = true;
+        else if (a[i] == "--battle") dbg.startBattle = true;
+        else if (a[i] == "--boss" && i + 1 < a.size()) { dbg.startBattle = true; dbg.battleSprite = a[++i]; }
+        else if (a[i] == "--sword") dbg.giveSword = true;
     }
     if (!shotPath.empty() && shotFrames <= 0) shotFrames = 120;
 
     char exe[MAX_PATH];
     GetModuleFileNameA(nullptr, exe, MAX_PATH);
-    fs::path root = findDataRoot(dataArg, fs::path(exe).parent_path());
+    const fs::path exeDir = fs::path(exe).parent_path();
+    fs::path root = findDataRoot(dataArg, exeDir);
     if (root.empty()) {
         MessageBoxA(nullptr,
                     "Game data not found.\n\nPut your extracted Digimon World 3 disc (the folder containing DAT\\) "
@@ -158,9 +199,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
 
     int exitCode = 0;
     {
-        Field field;
+        Game game;
         std::string err;
-        if (!field.init(root, stage, err)) {
+        if (!game.init(root, findStageDir(exeDir), stage, dbg, err)) {
             MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - load error", MB_ICONERROR);
             g_running = false;
             exitCode = 1;
@@ -171,7 +212,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         QueryPerformanceCounter(&last);
         const double tickSec = 1.0 / 60.0;
         double acc = 0;
-        Buttons prev{};
+        Held prev{};
         long long frame = 0;
 
         while (g_running) {
@@ -189,23 +230,46 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
 
             while (acc >= tickSec) {
                 acc -= tickSec;
-                Buttons b = pollButtons(GetForegroundWindow() == hwnd);
-                if (autowalk) { b.right = (frame / 90) % 2 == 0; b.down = (frame / 90) % 2 == 1; b.run = frame > 120; }
-                if (b.quit) g_running = false;
+                const bool focused = GetForegroundWindow() == hwnd && shotPath.empty();
+                Held h = poll(hwnd, focused);
+                if (autowalk) { h.right = (frame / 90) % 2 == 0; h.down = (frame / 90) % 2 == 1; h.run = frame > 120; }
+                if (autobattle) {
+                    h.up = (frame / 50) % 4 == 1;
+                    h.right = (frame / 50) % 4 == 0;
+                    h.atk1 = frame % 45 == 0;
+                    h.atk2 = frame % 45 == 20;
+                    h.atk3 = frame % 120 == 60;
+                    h.digivolve = frame % 30 == 0;
+                }
+                if (h.quit) g_running = false;
+
                 Input in;
-                in.up = b.up; in.down = b.down; in.left = b.left; in.right = b.right; in.run = b.run;
-                in.nextStage = b.next && !prev.next;
-                in.prevStage = b.prev && !prev.prev;
-                in.nextPartner = b.partner && !prev.partner;
-                in.toggleHud = b.hud && !prev.hud;
-                prev = b;
-                field.update(in);
+                in.up = h.up; in.down = h.down; in.left = h.left; in.right = h.right; in.run = h.run;
+                in.confirm = h.confirm; in.atk1 = h.atk1; in.atk2 = h.atk2; in.atk3 = h.atk3;
+                in.guard = h.guard; in.digivolve = h.digivolve;
+                in.confirmP = h.confirm && !prev.confirm;
+                in.atk1P = h.atk1 && !prev.atk1;
+                in.atk2P = h.atk2 && !prev.atk2;
+                in.atk3P = h.atk3 && !prev.atk3;
+                in.digivolveP = h.digivolve && !prev.digivolve;
+                in.nextStageP = h.next && !prev.next;
+                in.prevStageP = h.prev && !prev.prev;
+                in.partnerP = h.partner && !prev.partner;
+                in.hudP = h.hud && !prev.hud;
+                in.editorP = h.editor && !prev.editor;
+                in.equipP = h.equip && !prev.equip;
+                for (int vk = 0; vk < 256; ++vk) { in.key[vk] = h.key[vk]; in.keyP[vk] = h.key[vk] && !prev.key[vk]; }
+                in.lmb = h.lmb; in.rmb = h.rmb;
+                in.lmbP = h.lmb && !prev.lmb;
+                in.rmbP = h.rmb && !prev.rmb;
+                in.lmbR = !h.lmb && prev.lmb;
+                POINT pt;
+                if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) gfx::toVirtual(pt.x, pt.y, in.mx, in.my);
+                prev = h;
+                game.update(in);
             }
 
-            gfx::beginFrame(g_winW, g_winH);
-            field.render();
-            gfx::beginHud(g_winW, g_winH);
-            field.renderHud(g_winW, g_winH);
+            game.render(g_winW, g_winH);
             ++frame;
             if (!shotPath.empty() && frame >= shotFrames) {
                 glFinish();
@@ -214,7 +278,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
             }
             SwapBuffers(dc);
         }
-    }  // Field (and its textures) destroyed while the GL context is still current
+    }  // Game (and its textures) destroyed while the GL context is still current
 
     wglMakeCurrent(nullptr, nullptr);
     wglDeleteContext(glrc);

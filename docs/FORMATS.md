@@ -54,4 +54,12 @@ A slot is either `RLEN`-compressed or raw. Decompressed chunk:
 **Open:** whether layer B should be drawn above actors; black holes in some maps are filled by `FIELD/STAGE/S###TMPK.BIN` (animated tiles).
 
 ## FIELD/STAGE/S###MASK.BIN — partial
-`u32 offsets[4]` (0-terminated) → RLEN blocks. First block: 8bpp TIM with 11 CLUT rows; next blocks: 16bpp TIMs of 64x256 units whose bytes look like per-cell attribute/priority values (e.g. 0x25, 0x07 runs). Likely collision + depth priority. Needs decoding (owner: ps1-reverse-engineer + graphics-programmer).
+`u32 offsets[4]` (0-terminated) → RLEN blocks, each a TIM: block 0 = 8bpp 128x256 with 11 CLUT rows, blocks 1-2 = 128x256 8bpp-in-16bpp texture pages (use block 0's CLUTs).
+Rendered, they are **texture atlases of scene pieces** (not collision): most likely the foreground/occluder pieces and animated objects drawn over actors.
+
+## FIELD/STAGE/S###TMPK.BIN — partial
+`u32 sectionOffsets[3]`. Section 0: offset table → small records `{u16 count, u16 0, i16 flag, u16 frameIds...}` = sprite-part / tile-animation scripts that reference the MASK atlases (fills the black holes in Z_STAGE maps). Sections 1-2: animation timing tables (contain 1802 marker).
+
+## Collision / exits / NPCs — not in data files
+Not found in DAT. `PRO/WSTAG###.PRO` are raw MIPS overlays (start with code, e.g. `addiu sp,sp,-32`) and contain coordinate-like tables (e.g. WSTAG200 @0x2BA: pairs such as 1048,212 / 1096,286). Original collision/exits are likely compiled into these overlays.
+**Decision:** the PC edition uses its own `data/stages/*.stage` files (see README); decoding the overlays stays a research task.

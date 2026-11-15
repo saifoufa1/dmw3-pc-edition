@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(dmw3_pc_edition VERSION 0.0.1 LANGUAGES CXX)
+project(dmw3_pc_edition VERSION 0.0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,7 +30,11 @@ if(WIN32)
   add_executable(dmw3 WIN32
     src/platform/win32_main.cpp
     src/render/gl_renderer.cpp
-    src/game/field.cpp)
+    src/game/common.cpp
+    src/game/stage_data.cpp
+    src/game/field.cpp
+    src/game/battle.cpp
+    src/game/game.cpp)
   target_link_libraries(dmw3 PRIVATE dw3formats opengl32 gdi32 user32 shell32)
   target_compile_definitions(dmw3 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
     DMW3_VERSION="${PROJECT_VERSION}")

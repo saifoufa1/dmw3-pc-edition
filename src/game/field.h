@@ -1,69 +1,101 @@
-// Field mode: walk the tamer + partner Digimon around a pre-rendered stage.
+// Field mode: walk the tamer + partner around a stage with walls, exits, NPCs and items.
+// F2 opens the stage editor (paint walls, draw exits, place NPCs/items, set spawn).
 #pragma once
 #include <deque>
 #include <filesystem>
-#include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
-#include "formats/sprite_pack.h"
 #include "formats/stage_pack.h"
-#include "render/gl_renderer.h"
+#include "game/common.h"
+#include "game/stage_data.h"
 
 namespace dw3 {
 
-struct Input {
-    bool up = false, down = false, left = false, right = false, run = false;
-    bool nextStage = false, prevStage = false, nextPartner = false, toggleHud = false;  // edge-triggered
-};
-
-// 8 facings in screen space. Stored sprites cover S..N; W side is drawn mirrored.
-enum Dir { S, SE, E, NE, N, NW, W, SW };
-enum class Move { Idle = 0, Walk = 1, Run = 2 };
-
-struct SpriteSet {
-    std::string name;
-    SpritePack pack;
-    std::vector<Texture> tex;
-    ~SpriteSet();
-};
-
-struct Actor {
-    std::shared_ptr<SpriteSet> sprite;
-    float x = 0, y = 0;  // feet position in map pixels
-    Dir dir = S;
-    Move move = Move::Idle;
-    int anim = -1, key = 0, timer = 0;
-
-    void tick();
-    void draw(float camX, float camY) const;
+struct BattleRequest {
+    std::string enemySprite, enemyName;
+    int level = 1;
+    bool boss = false;
 };
 
 class Field {
 public:
-    bool init(const std::filesystem::path& dataRoot, const std::string& startStage, std::string& err);
+    Field(SpriteCache& sprites, Party& party) : sprites_(sprites), party_(party) {}
+    ~Field();
+    bool init(const std::filesystem::path& dataRoot, const std::filesystem::path& stageDir,
+              const std::string& startStage, std::string& err);
     void update(const Input& in);
     void render();
     void renderHud(int windowW, int windowH);
-    ~Field();
+
+    std::optional<BattleRequest> takeBattleRequest();
+    void endBattle(bool won);
+
+    // For the battle scene backdrop.
+    const Texture& stageTexture() const { return stageTex_; }
+    float camX() const { return camX_; }
+    float camY() const { return camY_; }
 
 private:
-    bool loadStage(size_t index, std::string& err);
-    std::shared_ptr<SpriteSet> loadSprite(const std::string& id, std::string& err);
-    bool walkable(float x, float y) const;
-    void spawn();
-    void updatePartner(float speed);
+    struct NpcRt {
+        NpcDef def;
+        Actor actor;
+        bool defeated = false;
+    };
+    enum class Tool { Walls, Exits, Npcs, Items, Spawn };
 
-    std::filesystem::path root_;
+    bool loadStage(size_t index, std::string& err, int arriveX = -1, int arriveY = -1);
+    bool walkable(float x, float y) const;
+    void placeParty(float x, float y);
+    void findAutoSpawn(float& x, float& y) const;
+    void buildNpcs();
+    void updatePartner(float speed);
+    void updateCamera();
+    void updateEditor(const Input& in);
+    void renderEditor();
+    std::string stageFile() const;
+    std::string npcKey(size_t i) const;
+
+    SpriteCache& sprites_;
+    Party& party_;
+    std::filesystem::path root_, stageDir_;
     std::vector<std::string> stageIds_;
     size_t stageIndex_ = 0;
     StageMap stage_;
+    StageData data_;
     Texture stageTex_;
 
     Actor player_, partner_;
-    std::vector<std::string> partnerIds_;
-    size_t partnerIndex_ = 0;
+    std::vector<NpcRt> npcs_;
     std::deque<std::pair<float, float>> trail_;
+    std::set<std::string> defeated_, pickedUp_;
+    std::optional<BattleRequest> battle_;
+    int battleNpc_ = -1;
+    int touchCooldown_ = 0;
+
+    // dialogue
+    int talkNpc_ = -1;
+    std::vector<std::string> talkPages_;
+    size_t talkPage_ = 0;
+
+    // stage transition
+    int fade_ = 0;          // 0..20, >0 means fading
+    bool fadingOut_ = false;
+    ExitZone pendingExit_;
+
+    // editor
+    bool editor_ = false;
+    Tool tool_ = Tool::Walls;
+    int brush_ = 1;
+    size_t editTarget_ = 0;
+    std::vector<std::string> npcSprites_;
+    size_t npcSprite_ = 0;
+    NpcKind npcKind_ = NpcKind::Fight;
+    bool dragging_ = false;
+    float dragX_ = 0, dragY_ = 0;
+    float mapMx_ = -1, mapMy_ = -1;
 
     float camX_ = 0, camY_ = 0;
     bool hud_ = true;
