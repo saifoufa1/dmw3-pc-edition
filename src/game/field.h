@@ -1,5 +1,5 @@
-// Field mode: walk the tamer + partner around a stage with walls, exits, NPCs and items.
-// F2 opens the stage editor (paint walls, draw exits, place NPCs/items, set spawn).
+// Field mode: walk the tamer + partner around a stage with walls, exits and NPCs.
+// F2 opens the stage editor (paint walls, draw exits, place NPCs, set spawn).
 #pragma once
 #include <deque>
 #include <filesystem>
@@ -44,7 +44,7 @@ private:
         Actor actor;
         bool defeated = false;
     };
-    enum class Tool { Walls, Exits, Npcs, Items, Spawn };
+    enum class Tool { Walls, Exits, Npcs, Spawn };
 
     bool loadStage(size_t index, std::string& err, int arriveX = -1, int arriveY = -1);
     bool walkable(float x, float y) const;
@@ -70,7 +70,7 @@ private:
     Actor player_, partner_;
     std::vector<NpcRt> npcs_;
     std::deque<std::pair<float, float>> trail_;
-    std::set<std::string> defeated_, pickedUp_;
+    std::set<std::string> defeated_;
     std::optional<BattleRequest> battle_;
     int battleNpc_ = -1;
     int touchCooldown_ = 0;

@@ -1,7 +1,7 @@
 // Win32 + OpenGL platform layer: window, input (keyboard, mouse, XInput), fixed 60 Hz loop.
 // Command line:
 //   dmw3.exe [--data <dir>] [--stage S200]
-//   testing: [--screenshot out.bmp --frames N] [--autowalk] [--battle] [--sword] [--autobattle]
+//   testing: [--screenshot out.bmp --frames N] [--autowalk] [--battle] [--boss <sprite>] [--autobattle]
 #include <windows.h>
 #include <shellapi.h>
 #include <GL/gl.h>
@@ -156,7 +156,6 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--autobattle") autobattle = true;
         else if (a[i] == "--battle") dbg.startBattle = true;
         else if (a[i] == "--boss" && i + 1 < a.size()) { dbg.startBattle = true; dbg.battleSprite = a[++i]; }
-        else if (a[i] == "--sword") dbg.giveSword = true;
     }
     if (!shotPath.empty() && shotFrames <= 0) shotFrames = 120;
 

@@ -11,7 +11,6 @@ constexpr int kTransTicks = 36;
 bool Game::init(const std::filesystem::path& dataRoot, const std::filesystem::path& stageDir,
                 const std::string& startStage, const DebugOptions& dbg, std::string& err) {
     if (!field_.init(dataRoot, stageDir, startStage, err)) return false;
-    if (dbg.giveSword) party_.hasSword = party_.swordEquipped = true;
     if (dbg.startBattle) {
         const bool boss = dbg.battleSprite != "P171BAGM";
         BattleRequest r{dbg.battleSprite, boss ? "Digmon" : "Black Agumon", boss ? 8 : 3, boss};

@@ -212,16 +212,6 @@ void Field::update(const Input& in) {
         for (size_t tries = 0; tries < n && !loadStage(idx, err); ++tries)
             idx = in.nextStageP ? (idx + 1) % n : (idx + n - 1) % n;
     }
-    if (in.equipP) {
-        if (party_.hasSword) {
-            party_.swordEquipped = !party_.swordEquipped;
-            status_ = party_.swordEquipped ? party_.partnerName + " equipped the SWORD" : "Sword unequipped";
-        } else {
-            status_ = "No weapon yet - find the sword on the map";
-        }
-        statusTimer_ = 120;
-    }
-
     // ---- dialogue ----
     if (talkNpc_ >= 0) {
         if (in.confirmP) {
@@ -300,21 +290,6 @@ void Field::update(const Input& in) {
                 }
             }
         }
-        // ---- items ----
-        for (size_t i = 0; i < data_.items.size(); ++i) {
-            std::string key = stageIds_[stageIndex_] + "#item" + std::to_string(i);
-            if (pickedUp_.count(key)) continue;
-            const auto& it = data_.items[i];
-            if (dist(player_.x, player_.y, float(it.x), float(it.y)) < kItemRange) {
-                pickedUp_.insert(key);
-                if (it.id == "sword") {
-                    party_.hasSword = true;
-                    party_.swordEquipped = true;
-                    status_ = "Got the SWORD! " + party_.partnerName + " equipped it.  [R] equip / unequip";
-                    statusTimer_ = 240;
-                }
-            }
-        }
         // ---- exits ----
         for (const auto& e : data_.exits) {
             if (player_.x >= e.x && player_.x < e.x + e.w && player_.y >= e.y && player_.y < e.y + e.h) {
@@ -337,8 +312,7 @@ void Field::updateEditor(const Input& in) {
     if (in.keyP['1']) tool_ = Tool::Walls;
     if (in.keyP['2']) tool_ = Tool::Exits;
     if (in.keyP['3']) tool_ = Tool::Npcs;
-    if (in.keyP['4']) tool_ = Tool::Items;
-    if (in.keyP['5']) tool_ = Tool::Spawn;
+    if (in.keyP['4']) tool_ = Tool::Spawn;
     if (in.keyP[VK_LBRACKET]) brush_ = std::max(0, brush_ - 1);
     if (in.keyP[VK_RBRACKET]) brush_ = std::min(8, brush_ + 1);
     const bool prev = in.keyP[VK_COMMA], next = in.keyP[VK_PERIOD];
@@ -410,15 +384,6 @@ void Field::updateEditor(const Input& in) {
                     }
             }
             break;
-        case Tool::Items:
-            if (in.lmbP) data_.items.push_back({"sword", mx, my});
-            if (in.rmbP)
-                for (size_t i = 0; i < data_.items.size(); ++i)
-                    if (dist(float(mx), float(my), float(data_.items[i].x), float(data_.items[i].y)) < 16.f) {
-                        data_.items.erase(data_.items.begin() + i);
-                        break;
-                    }
-            break;
         case Tool::Spawn:
             if (in.lmbP) { data_.spawnX = mx; data_.spawnY = my; }
             break;
@@ -453,29 +418,16 @@ void Field::renderEditor() {
 void Field::render() {
     gfx::drawTexture(stageTex_, -camX_, -camY_);
 
-    // items on the ground
-    for (size_t i = 0; i < data_.items.size(); ++i) {
-        if (pickedUp_.count(stageIds_[stageIndex_] + "#item" + std::to_string(i))) continue;
-        const auto& it = data_.items[i];
-        float bob = std::sin(ticks_ * 0.08f) * 2.f;
-        gfx::drawGlow(it.x - camX_, it.y - camY_ - 6, 12.f, rgba(255, 230, 120, 140));
-        gfx::drawRotated(swordTexture(), it.x - camX_, it.y - camY_ - 4 + bob, 3.5f, 19.f, 0.6f, 1.f, false, 0xffffffffu);
-    }
-
     // painter's order by feet Y
     struct Item { float y; int kind; size_t idx; };
     std::vector<Item> order{{player_.y, 0, 0}, {partner_.y, 1, 0}};
     for (size_t i = 0; i < npcs_.size(); ++i)
         if (!npcs_[i].defeated) order.push_back({npcs_[i].actor.y, 2, i});
     std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.y < b.y; });
-    const bool sword = party_.swordEquipped;
     for (const auto& o : order) {
         if (o.kind == 0) player_.draw(camX_, camY_);
-        else if (o.kind == 1) {
-            if (sword && swordBehindBody(partner_)) drawHeldSword(partner_, camX_, camY_, 1.f, -1.f);
-            partner_.draw(camX_, camY_);
-            if (sword && !swordBehindBody(partner_)) drawHeldSword(partner_, camX_, camY_, 1.f, -1.f);
-        } else {
+        else if (o.kind == 1) partner_.draw(camX_, camY_);
+        else {
             const auto& n = npcs_[o.idx];
             float scale = n.def.kind == NpcKind::Boss ? 1.35f : 1.f;
             n.actor.draw(camX_, camY_, scale);
@@ -518,19 +470,18 @@ void Field::renderHud(int ww, int wh) {
     if (hud_) {
         std::snprintf(line, sizeof line, "DMW3 PC Edition v%s | Stage %s (%zu/%zu)  pos %d,%d  %s%s", DMW3_VERSION,
                       stageIds_[stageIndex_].c_str(), stageIndex_ + 1, stageIds_.size(), int(player_.x), int(player_.y),
-                      party_.swordEquipped ? "[Sword]" : "", editor_ ? "  [EDITOR]" : "");
+                      "", editor_ ? "  [EDITOR]" : "");
         gfx::drawText(10, 20, line);
         if (!editor_)
             gfx::drawText(10, wh - 12,
-                          "Move: WASD/Arrows  Run: Shift  Talk: Space  Equip sword: R  Stage: PgUp/PgDn  Editor: F2  HUD: F1",
+                          "Move: WASD/Arrows  Run: Shift  Talk: Space  Stage: PgUp/PgDn  Editor: F2  HUD: F1",
                           0xffb0e0ffu);
     }
     if (editor_) {
         static const char* names[] = {"1 WALLS: LMB paint, RMB erase, [ ] brush", "2 EXITS: drag LMB, RMB delete, , . target",
-                                      "3 NPCS: LMB place, RMB delete, , . sprite, T kind", "4 ITEMS: LMB sword, RMB delete",
-                                      "5 SPAWN: LMB set player start"};
+                                      "3 NPCS: LMB place, RMB delete, , . sprite, T kind", "4 SPAWN: LMB set player start"};
         int y = 44;
-        for (int i = 0; i < 5; ++i, y += 17) gfx::drawText(10, y, names[i], int(tool_) == i ? 0xff40ffffu : 0xffa0a0a0u);
+        for (int i = 0; i < 4; ++i, y += 17) gfx::drawText(10, y, names[i], int(tool_) == i ? 0xff40ffffu : 0xffa0a0a0u);
         if (tool_ == Tool::Exits) std::snprintf(line, sizeof line, "exit target: %s", stageIds_[editTarget_].c_str());
         else if (tool_ == Tool::Npcs) std::snprintf(line, sizeof line, "npc: %s  kind: %s", npcSprites_.empty() ? "-" : npcSprites_[npcSprite_].c_str(), npcKindName(npcKind_));
         else if (tool_ == Tool::Walls) std::snprintf(line, sizeof line, "brush %d   Ctrl+G auto walls  Ctrl+X clear", brush_ * 2 + 1);

@@ -7,11 +7,10 @@ cell 8
 size 160 112
 spawn 300 640
 exit 0 792 18 64 S400 205 862
-npc talk P011MINO 330 600 0 "Mina" "Welcome to the DMW3 PC Edition demo!|Walls work now - try walking into a building.|There is a SWORD by the stairs. Grab it, then press R.|Black Agumon waits on the boulevard. Touch it to fight!|The bridge to the south-west leads to the forest."
+npc talk P011MINO 330 600 0 "Mina" "Welcome to the DMW3 PC Edition demo!|Walls work now - try walking into a building.|Black Agumon waits on the boulevard. Touch it to fight!|The bridge to the south-west leads to the forest."
 npc fight P171BAGM 610 482 7 "Black Agumon" 3
 npc fight P167SAGM 830 600 6 "Blue Agumon" 4
 npc boss P123DIGM 960 252 0 "Digmon" 8
-item sword 430 600
 walls
 ################################################################################################################################################################
 ################################################################################################################################################################

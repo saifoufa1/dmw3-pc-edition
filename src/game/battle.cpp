@@ -12,10 +12,10 @@ namespace {
 constexpr float kArenaL = 22, kArenaR = 298, kArenaT = 112, kArenaB = 226;
 constexpr int kEvoDuration = 60 * 25;  // a digivolution lasts 25 s, then reverts to Rookie
 
-// Attack tuning per slot: 0 = ranged, 1 = melee (sword if equipped), 2 = spread special.
+// Attack tuning per slot: 0 = ranged, 1 = melee, 2 = spread special.
 struct AttackDef { float mp; int cooldown; int duration; float dmg; };
 constexpr AttackDef kAttacks[3] = {{6, 34, 20, 10}, {0, 22, 18, 7}, {16, 80, 26, 7}};
-constexpr float kSwordMul = 1.85f, kClawReach = 24, kSwordReach = 36;
+constexpr float kClawReach = 24;
 
 float len(float x, float y) { return std::sqrt(x * x + y * y); }
 float frand(long long& seed) {  // tiny deterministic LCG
@@ -77,7 +77,6 @@ std::string Battle::formName() const {
 }
 
 std::string Battle::attackName(int slot) const {
-    if (slot == 1 && party_.swordEquipped) return me_.evo == 0 ? "Sword Slash" : "Giant Sword Slash";
     if (party_.partnerId == "P006AGUM") return kAgumonAttacks[me_.evo][slot];
     static const char* generic[3] = {"Blast", "Strike", "Burst"};
     return generic[slot];
@@ -158,12 +157,10 @@ void Battle::resolvePlayerAttack() {
         fireShot(f, foe_, kAttacks[0].dmg * pw, big ? 4.2f : 3.6f, (big ? 7.f : 5.f) * std::sqrt(f.scale), 0, rgba(255, 140, 40), 0);
     } else if (slot == 1 && !f.actHit && f.actTimer <= kAttacks[1].duration - 6) {
         f.actHit = true;
-        const bool sword = party_.swordEquipped;
-        float reach = (sword ? kSwordReach : kClawReach) * f.scale;
+        float reach = kClawReach * f.scale;
         float d = len(foe_.cx() - f.cx(), (foe_.cy() - f.cy()) * 1.4f);
         if (d < reach + 10.f * foe_.scale) {
-            hit(foe_, f, kAttacks[1].dmg * pw * (sword ? kSwordMul : 1.f), f.a.x, f.a.y);
-            if (sword) burst(foe_.cx(), foe_.cy(), rgba(200, 230, 255), 12, 3.f);
+            hit(foe_, f, kAttacks[1].dmg * pw, f.a.x, f.a.y);
         }
     } else if (slot == 2 && f.actTimer == kAttacks[2].duration - 8) {
         int n = f.evo >= 2 ? 5 : 3;
@@ -370,17 +367,13 @@ void Battle::render() {
         if (f == &foe_ && f->act >= 0 && f->actTimer > (f->act == 1 ? 8 : 12))  // telegraph wind-up in red
             tint = (ticks_ / 3) % 2 ? rgba(255, 120, 120) : 0xffffffffu;
         tint = (tint & 0x00ffffffu) | (uint32_t(255 * f->deathFade) << 24);
-        const bool sword = f == &me_ && party_.swordEquipped;
-        float swing = (f == &me_ && f->act == 1) ? 1.f - float(f->actTimer) / kAttacks[1].duration : -1.f;
         if (f->evoTimer > 0) {  // digivolved aura, pulses faster as it runs out
             float p = 0.5f + 0.5f * std::sin(ticks_ * (f->evoTimer < 300 ? 0.4f : 0.12f));
             gfx::drawGlow(f->cx() + camX * -1, f->cy() - camY, 22.f * f->scale, rgba(255, 200, 80, uint8_t(50 + 60 * p)));
         }
-        if (sword && swordBehindBody(f->a)) drawHeldSword(f->a, camX, camY, f->scale, swing);
         f->a.draw(camX, camY, f->scale, tint, f->flash > 0 ? f->flash / 8.f : 0.f);
-        if (sword && !swordBehindBody(f->a)) drawHeldSword(f->a, camX, camY, f->scale, swing);
         if (f->guarding) gfx::drawGlow(f->cx() - camX, f->cy() - camY, 20.f * f->scale, rgba(100, 180, 255, 110));
-        if (f == &me_ && f->act == 1 && !sword && f->actTimer > 8) {  // claw slash streak
+        if (f == &me_ && f->act == 1 && f->actTimer > 8) {  // claw slash streak
             float fx, fy;
             dirVector(f->a.dir, fx, fy);
             gfx::drawGlow(f->cx() + fx * 18 * f->scale - camX, f->cy() + fy * 8 - camY, 10 * f->scale, rgba(255, 255, 255, 140));
@@ -433,7 +426,7 @@ void Battle::renderHud(int ww, int wh) {
     for (int s = 0; s < 3; ++s) {
         bool can = me_.cd[s] == 0 && me_.mp >= kAttacks[s].mp;
         std::snprintf(buf, sizeof buf, "[%s] %s (%dMP)", keys[s], attackName(s).c_str(), int(kAttacks[s].mp));
-        gfx::drawText(cx, wh - 30, buf, can ? (s == 1 && party_.swordEquipped ? 0xffffe0a0u : 0xffffffffu) : 0xff707070u);
+        gfx::drawText(cx, wh - 30, buf, can ? 0xffffffffu : 0xff707070u);
         cx += int(std::strlen(buf) + 3) * gfx::kCharW;
     }
     gfx::drawText(10, wh - 12, "[Space] Guard   [U] Digivolve   Move: WASD (Shift run)   Gamepad: X/B/Y attacks, LB guard, RB digivolve",

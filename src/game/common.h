@@ -1,4 +1,4 @@
-// Shared game types: input, sprite sets, actors, party/equipment, the sword.
+// Shared game types: input, sprite sets, actors, party state, digivolution stages.
 #pragma once
 #include <filesystem>
 #include <map>
@@ -79,15 +79,7 @@ constexpr int kMaxEvo = 3;
 struct Party {
     std::string partnerId = "P006AGUM";
     std::string partnerName = "Agumon";
-    bool hasSword = false;
-    bool swordEquipped = false;
     int wins = 0;
 };
-
-// The sword is project-made pixel art generated in code (not game data).
-const Texture& swordTexture();
-// Draws the sword in the actor's hand. swing01 < 0 = resting, 0..1 = swing progress.
-void drawHeldSword(const Actor& a, float camX, float camY, float scale, float swing01);
-bool swordBehindBody(const Actor& a);
 
 }  // namespace dw3

@@ -8,7 +8,7 @@ All integers little-endian. "Verified" = holds for every file of that type (chec
 | `DAT/Z_STAGE/S###PACK.BIN` (237) | Pre-rendered field backgrounds — **decoded** |
 | `DAT/FIELD/SPRT/P###XXXX.BIN` (179) | Field character sprites + animations — **decoded** |
 | `DAT/FIELD/STAGE/S###MASK.BIN`, `S###TMPK.BIN` | Per-stage mask/attribute data, tile animation pack — open |
-| `DAT/MODEL/M###XXXX.BIN` | Battle 3D models (name = species id + short name) — open |
+| `DAT/MODEL/M###XXXX.BIN` | Battle 3D models (name = species id + short name; e.g. M003AGUM Agumon, M005GREY Greymon, M012MTGR MetalGreymon, M213WGRE WarGreymon). Header = u32 offset table (first entry = table size), RLEN block near the end (texture?) — open |
 | `DAT/EFFECT/*` | Battle effects — open |
 | `DAT/SOUND/MP*.BIN`, `MV*.BIN` | Music/SFX (likely sequence + sample bank pairs) — open |
 | `DAT/CARD`, `TEXT`, `SCREEN`, `*CS.BIN`/`*TM.BIN` pairs | UI graphics (TM = textures?, CS = cast/layout?) — open |

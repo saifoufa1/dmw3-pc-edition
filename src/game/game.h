@@ -10,7 +10,6 @@ namespace dw3 {
 
 struct DebugOptions {
     bool startBattle = false;   // jump straight into a fight (testing)
-    bool giveSword = false;
     std::string battleSprite = "P171BAGM";
 };
 
