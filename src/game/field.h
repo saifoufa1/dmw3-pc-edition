@@ -2,6 +2,7 @@
 // F2 opens the stage editor (paint walls, draw exits, place NPCs, set spawn).
 #pragma once
 #include <deque>
+#include <map>
 #include <filesystem>
 #include <optional>
 #include <set>
@@ -11,6 +12,7 @@
 #include "formats/field_stage.h"
 #include "formats/stage_overlay.h"
 #include "formats/stage_pack.h"
+#include "formats/stage_tables.h"
 #include "game/common.h"
 #include "game/stage_data.h"
 #include "game/story.h"
@@ -46,6 +48,9 @@ public:
     bool warpTo(const std::string& stage, int x, int y);  // x < 0 = stage spawn
     void reloadPartner();
     void saveStory();
+    // Test: walks through every door of these stages both ways with the game's own door code; one line per door
+    // ("PASS S210 zone 2 -> S225 -> back at zone 2"), returns the number of failures.
+    int doorSelfTest(const std::vector<std::string>& stages, std::vector<std::string>& report);
 
     // For the battle scene backdrop.
     const Texture& stageTexture() const { return stageTex_; }
@@ -59,6 +64,7 @@ private:
         bool defeated = false;
         std::string storyId;  // story actor id ("" = from the stage file)
         int origSlot = -1;    // matching original WSTAG event actor slot (original talk lines)
+        bool hidden = false;  // original actor without a sprite: an invisible blocker (e.g. in front of a counter)
     };
     enum class Tool { Walls, Exits, Npcs, Spawn };
     // A scene object from the WSTAG overlay drawn every frame (animated or additive glow).
@@ -68,6 +74,22 @@ private:
         int delay = 8, timer = 0;
         size_t cur = 0;
         bool additive = false;
+        int depthY = 0;  // > 0: foreground piece, drawn over actors whose feet are above this line
+        int link = 0;    // door piece of an area link (0x64..): slides open when the player uses the door
+    };
+    // Door / exit sequence: door opens -> tile wipe -> (new stage) area card -> fade in.
+    struct DoorSeq {
+        int phase = -1;  // -1 idle, 0 door opens, 1 wipe out, 2 area card, 3 card out
+        int t = 0;
+        DoorRecord door;
+        std::string city, area;  // area card lines (data/areas.cfg)
+    };
+    // A teleport port (data/ports.cfg, ours): opens with a light effect when the player steps on it / confirms.
+    struct Port {
+        std::string stage;
+        int x = 0, y = 0, r = 14;
+        std::string target;  // "" = effect only
+        int tx = -1, ty = -1;
     };
     struct PieceTex {
         Texture tex;
@@ -77,11 +99,20 @@ private:
 
     bool loadStage(size_t index, std::string& err, int arriveX = -1, int arriveY = -1);
     bool walkable(float x, float y) const;
+    bool flagsHold(const std::vector<FlagCond>& l, int slot = 0) const;  // original game flags (story) hold
+    int doorAt(float x, float y) const;   // index into doors_ of the usable warp under (x, y), -1 = none
+    int playerDoor() const;               // door the player stands in or faces from right next to it
+    void enterDoor(const DoorRecord& d);  // the transition sequence
+    bool arriveThrough(const DoorRecord& d, std::string& err);  // load the target stage at the door's arrival
+    void updateDoorSeq(const Input& in);
+    void renderDoorSeq();
+    void loadAreaNames();
+    void loadPorts();
+    int portAt(float x, float y) const;
     void placeParty(float x, float y);
     void findAutoSpawn(float& x, float& y) const;
     void loadOriginalStage(const std::string& id);  // MASK/TMPK + WSTAG overlay -> pieces, walk map
     void applyOriginalWalls();
-    void addOriginalNpcs();                          // decoded event actors (stages without a .stage file)
     const PieceTex* pieceTex(int piece);
     void clearPieceTex();
     void buildNpcs();
@@ -108,7 +139,6 @@ private:
     StageOverlay overlay_;              // original WSTAG tables (spawn, objects, event actors)
     std::vector<SceneAnim> anims_;
     std::vector<PieceTex> pieceTex_;
-    std::vector<std::string> spriteByNumber_;  // P### -> FIELD/SPRT id ("" if none)
 
     Actor player_, partner_;
     std::vector<Actor> followers_;  // the other team members, walking behind the active partner
@@ -130,9 +160,20 @@ private:
     size_t talkPage_ = 0;
 
     // stage transition
-    int fade_ = 0;          // 0..20, >0 means fading
-    bool fadingOut_ = false;
-    ExitZone pendingExit_;
+    std::vector<NpcRecord> origNpcs_;   // data/npcs/S###.npc (extracted original event actors)
+    std::vector<DoorRecord> doors_;     // data/doors/S###.door + hand exits of stages without one
+    bool origDoors_ = false;            // doors_ come from the extracted table (trigger zones), not from .stage exits
+    DoorSeq seq_;
+    // The original door marker: DAT/FIELD/FIELDCOM.BIN cell group 0, pieces 35-38 (red/white/blue spark right of
+    // the head, origin +4,-36 from the feet), loaded once.
+    struct MarkFrame { Texture tex; int ox = 0, oy = 0; };
+    std::vector<MarkFrame> doorMark_;
+    void loadDoorMark();
+    std::string pendingStage_;          // story "on stage" trigger held back until the area card is gone
+    std::map<std::string, std::string> areaNames_;
+    std::vector<Port> ports_;
+    int portIdx_ = -1, portT_ = -1;      // port effect running
+    int lastPort_ = -1;                  // the port the player stands on (steps on -> opens once)
 
     // editor
     bool editor_ = false;

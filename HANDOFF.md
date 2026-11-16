@@ -47,6 +47,7 @@ shows the fighter's level and stat gains. A Digimon can digivolve in battle only
 Useful flags (see `src/platform/win32_main.cpp`):
 - `--battle`, `--form 0..3`, `--boss SPRITE`, `--arena N`, `--cam-yaw DEG`, `--dv` — jump into a fight
 - `--new-game`, `--no-story`, `--story-event NAME`, `--pos X Y`, `--stage S200` — field / story tests
+- `--door-test OUT.txt` — walks every door of S210/S200/S220/S225/S230 both ways (exit code 1 on a failure)
 - `--frames N --screenshot out.bmp` (+ `--attack 1..3`, `--confirm-at F`, `--confirm-every N`) — headless screenshot tests
 - `--ui-preview hud|result|levelup|window|font|sheets` — original UI component preview
 - `--dev` (F3 size dashboard in battle), `--sizes` (opens it) — developer only
@@ -65,7 +66,10 @@ Useful flags (see `src/platform/win32_main.cpp`):
 | `data/starter_sets.cfg` | the original starter packs A/B/C (members, portraits, `@N` original texts) |
 | `data/digivolve_paths.cfg` + `src/game/digimon_db.*` | per-species stats, growth and digivolve paths |
 | `data/areas.cfg` | area names for the save slot screen |
-| `data/stages/*.stage` | our stage files (walls, exits, NPCs) — editable in game with F2 |
+| `data/stages/*.stage` | our stage files (walls, spawn; exits/NPCs only for our own stages such as S400) — editable in game with F2 |
+| `data/npcs/S###.npc`, `data/doors/S###.door` | NPCs and doors extracted from the player's game data (`build.bat` runs `dw3check --extract-npcs data`; git-ignored). The field places NPCs ONLY from these; story NPCs bind to an original slot (`actor ... slot N`) |
+| `data/file_ids.cfg` | original file id -> file name (names only; `dw3check --map-file-ids DISC.cue`) |
+| `data/ports.cfg` | our teleport ports (light effect when stepped on) |
 | `data/story/chapter1.story` | our story script (references original message ids; no game text) |
 | `data/battle_sizes.cfg` | battle sizes (Agumon 0.6, Greymon 1.5, MetalGreymon 2.1, WarGreymon 2.6) |
 | `tools/dw3check.cpp` | corpus checker + dump tools |
@@ -83,7 +87,7 @@ window/font and post-battle EXP/BIT/level-up screen.
 1. Draw the game as the original: original menus (status, items, Digimon), original positions of the HUD
    (layout code in `PRO/FIGHTSTG.PRO`, `PRO/STFGTREP.PRO` not decoded yet — current layout is reconstructed).
 2. Exit/door destinations (lobby interior, Digimon Lab, shops) so the opening plays in the original rooms.
-3. WSTAG charId -> sprite map (NPCs still use hand-placed sprites), original stage -> arena table.
+3. Original stage -> arena table (the charId -> sprite map is done: FIELDSTG character table).
 4. Chapter 2 of the story; enemies' original parties.
 5. Audio (SPU ADPCM banks + sequenced BGM).
 

@@ -4,9 +4,12 @@
 #include <cmath>
 #include <cctype>
 #include <cstdio>
+#include <fstream>
 #include <map>
+#include <sstream>
 
 #include "core/bytes.h"
+#include "formats/ui_sheet.h"
 
 namespace fs = std::filesystem;
 
@@ -16,8 +19,10 @@ namespace {
 constexpr float kWalkSpeed = 1.25f;  // map px per tick (60 Hz)
 constexpr float kRunSpeed = 2.5f;
 constexpr size_t kTrailGap = 22;  // how far behind the partner walks (in trail samples)
-constexpr int kFadeTicks = 20;
-constexpr float kTalkRange = 28.f, kTouchRange = 15.f, kItemRange = 14.f;
+constexpr int kDoorOpenTicks = 14, kWipeTicks = 24, kCardTicks = 100, kCardOutTicks = 18;
+constexpr int kPortTicks = 70;
+constexpr int kMarkFirst = 35, kMarkFrames = 4, kMarkTicks = 6;  // FIELDCOM door marker pieces, ticks per frame
+constexpr float kTalkRange = 36.f, kTouchRange = 15.f, kItemRange = 14.f;
 
 float dist(float ax, float ay, float bx, float by) { return std::sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by)); }
 
@@ -26,6 +31,7 @@ enum : int { VK_CTRL = 0x11, VK_LBRACKET = 0xDB, VK_RBRACKET = 0xDD, VK_COMMA = 
 }  // namespace
 
 Field::~Field() {
+    for (auto& m : doorMark_) gfx::destroy(m.tex);
     gfx::destroy(stageTex_);
     clearPieceTex();
 }
@@ -84,7 +90,11 @@ void Field::loadOriginalStage(const std::string& id) {
         }
         if (a.pieces.empty()) continue;
         a.additive = fstage_.pieces[size_t(a.pieces[0])].flag != -1;
-        if (a.pieces.size() == 1 && !a.additive) {  // static opaque piece: bake into the background
+        // flags 0x400 + a sort line: foreground piece (counter fronts, railings) drawn in depth order with the
+        // actors, so NPCs behind a counter are hidden by it. link 0x64..: the door piece of an area link.
+        if ((o.flags & 0x400) && o.depthY > 0) a.depthY = o.depthY;
+        if (o.link >= 0x64) a.link = o.link;
+        if (a.pieces.size() == 1 && !a.additive && !a.depthY && !a.link) {  // static opaque piece: bake into the background
             Image img;
             int ox, oy;
             if (!fstage_.renderPiece(a.pieces[0], img, ox, oy)) continue;
@@ -109,54 +119,6 @@ void Field::applyOriginalWalls() {
     data_.originalWalls = true;
 }
 
-void Field::addOriginalNpcs() {
-    // Several records share an actor slot (one per story state): show the most common variant.
-    std::map<int, std::map<int, int>> votes;
-    std::map<int, const OverlayActor*> first;
-    for (const auto& a : overlay_.actors) {
-        if (a.charId == 1) continue;  // the player's own record
-        votes[a.slot][a.charId]++;
-        if (!first.count(a.slot * 1000 + a.charId)) first[a.slot * 1000 + a.charId] = &a;
-    }
-    for (const auto& [slot, v] : votes) {
-        const OverlayActor* a = nullptr;
-        if (story_) {
-            // With a story: the first variant (record order) whose show conditions hold on the original game flags
-            // (e.g. the lobby before / after the partner download, gflags 6002 / 6004). None = not here now.
-            for (const auto& c : overlay_.actors) {
-                if (c.slot != slot || c.charId == 1) continue;
-                bool show = true;
-                for (const auto& f : c.show)
-                    show = show && story_->gflag(Story::gkey(stageIds_[stageIndex_], slot, f.flag)) == f.value;
-                if (show) { a = &c; break; }
-            }
-            if (!a) continue;
-        } else {
-            int best = -1, n = 0;
-            for (const auto& [cid, c] : v)
-                if (c > n) { n = c; best = cid; }
-            a = first[slot * 1000 + best];
-        }
-        if (a->x == 0 && a->y == 0) continue;  // off-map record (spawned by an event)
-        const size_t num = size_t(a->charId & 0xFF);
-        if (num >= spriteByNumber_.size() || spriteByNumber_[num].empty()) continue;
-        bool taken = false;  // a hand-placed NPC of the .stage file already stands here
-        for (const auto& o : data_.npcs) taken = taken || (std::abs(o.x - a->x) < 8 && std::abs(o.y - a->y) < 8);
-        if (story_ && story_->hasActorAt(stageIds_[stageIndex_], a->x, a->y)) taken = true;  // the story's own NPC
-        if (taken) continue;
-        NpcDef d;
-        d.kind = NpcKind::Talk;
-        d.sprite = spriteByNumber_[num];
-        d.x = a->x;
-        d.y = a->y;
-        d.dir = a->dir & 7;
-        d.name = d.sprite.substr(4);
-        d.text = "(Original NPC position. Dialogue not decoded yet.)";
-        d.original = true;
-        data_.npcs.push_back(d);
-    }
-}
-
 bool Field::init(const fs::path& dataRoot, const fs::path& stageDir, const std::string& startStage, std::string& err) {
     root_ = dataRoot;
     stageDir_ = stageDir;
@@ -168,22 +130,9 @@ bool Field::init(const fs::path& dataRoot, const fs::path& stageDir, const std::
     std::sort(stageIds_.begin(), stageIds_.end());
     if (stageIds_.empty()) { err = "no stages in DAT/Z_STAGE"; return false; }
     npcSprites_ = sprites_.listMovable();
-    // P### number -> sprite id (first file with that number, e.g. 57 -> P057AOAB).
-    spriteByNumber_.assign(256, std::string());
-    std::vector<std::string> sprt;
-    std::error_code ec;
-    for (auto& e : fs::directory_iterator(root_ / "DAT" / "FIELD" / "SPRT", ec)) {
-        std::string n = e.path().stem().string();
-        if (n.size() == 8 && n[0] == 'P' && std::isdigit((unsigned char)n[1]) && std::isdigit((unsigned char)n[2]) &&
-            std::isdigit((unsigned char)n[3]))
-            sprt.push_back(n);
-    }
-    std::sort(sprt.begin(), sprt.end());
-    for (const auto& n : sprt) {
-        const int num = std::stoi(n.substr(1, 3));
-        if (num < 256 && spriteByNumber_[size_t(num)].empty()) spriteByNumber_[size_t(num)] = n;
-    }
-
+    loadDoorMark();
+    loadAreaNames();
+    loadPorts();
     player_.sprite = sprites_.get("P001PLAY", &err);
     if (!player_.sprite) return false;
     partner_.sprite = sprites_.get(party_.partnerId, &err);
@@ -224,9 +173,42 @@ bool Field::loadStage(size_t index, std::string& err, int arriveX, int arriveY) 
             if (haveFile) { data_.exits = keep.exits; data_.npcs = keep.npcs; data_.items = keep.items; data_.spawnX = keep.spawnX; data_.spawnY = keep.spawnY; }
         }
     }
-    if (haveFile && data_.originalNpcs) addOriginalNpcs();
+    // Original NPCs and doors: the tables extracted from the disc (dw3check --extract-npcs data).
+    origNpcs_.clear();
+    doors_.clear();
+    origDoors_ = false;
+    const fs::path base = stageDir_.parent_path();
+    if (loadNpcTable((base / "npcs" / (id + ".npc")).string(), origNpcs_)) {
+        data_.npcs.clear();  // only the original NPCs here (no hand-placed ones)
+        overlay_.actors.clear();
+        for (const auto& r : origNpcs_) {  // talk tables (Story::sayOriginal) from the same data
+            OverlayActor a;
+            a.charId = uint16_t(r.charId);
+            a.slot = uint16_t(r.slot);
+            a.x = int16_t(r.x);
+            a.y = int16_t(r.y);
+            a.dir = int16_t(r.dir);
+            a.show = r.show;
+            a.talk = r.talk;
+            overlay_.actors.push_back(std::move(a));
+        }
+    }
+    if (fstage_.hasTrigger && loadDoorTable((base / "doors" / (id + ".door")).string(), doors_)) {
+        origDoors_ = true;
+    } else {
+        doors_.clear();
+        for (size_t i = 0; i < data_.exits.size(); ++i) {  // hand-made exits of our own stages (e.g. S400)
+            DoorRecord d;
+            d.index = int(i);
+            d.kind = 1;
+            d.target = data_.exits[i].target;
+            d.x = data_.exits[i].arriveX;
+            d.y = data_.exits[i].arriveY;
+            d.dir = -1;
+            doors_.push_back(d);
+        }
+    }
     if (!haveFile) {
-        addOriginalNpcs();
         if (overlay_.spawnX >= 0 && fstage_.walkAt(overlay_.spawnX, overlay_.spawnY)) { data_.spawnX = overlay_.spawnX; data_.spawnY = overlay_.spawnY; }
     }
     buildNpcs();
@@ -239,7 +221,10 @@ bool Field::loadStage(size_t index, std::string& err, int arriveX, int arriveY) 
     talkNpc_ = -1;
     status_ = "Stage " + id + (haveFile ? "" : "  (no stage data yet: auto walls - press F2 to edit)");
     statusTimer_ = dev_ ? 150 : 0;  // players do not see stage ids
-    if (story_) story_->onStage(id);
+    if (story_) {
+        if (seq_.phase >= 0) pendingStage_ = id;  // after the door sequence (the card first, then the scene)
+        else story_->onStage(id);
+    }
     return true;
 }
 
@@ -323,11 +308,39 @@ void Field::buildNpcs() {
                 if (!anims[a].keys.empty()) { n.actor.anim = int(a); break; }
         }
         n.defeated = defeated_.count(stageIds_[stageIndex_] + "#" + std::to_string(i)) > 0;
-        for (const auto& a : overlay_.actors)  // same spot as an original event actor -> its talk table
-            if (a.charId != 1 && !a.talk.empty() && std::abs(a.x - n.def.x) <= 4 && std::abs(a.y - n.def.y) <= 4) {
-                n.origSlot = a.slot;
-                break;
-            }
+        npcs_.push_back(std::move(n));
+    }
+    // Original event actors (data/npcs): like FIELDSTG 0x8008A7CC, every record whose show conditions hold is
+    // created (skipped there: char 1 = the player, 0x6A, 0x146, 0x147). (0,0) = placed later by an event.
+    const std::string& sid = stageIds_[stageIndex_];
+    std::set<int> slotsDone;  // without a story (sandbox): the first variant of each slot
+    for (const auto& r : origNpcs_) {
+        if (r.charId == 1 || r.charId == 0x6A || r.charId == 0x146 || r.charId == 0x147) continue;
+        if (r.x == 0 && r.y == 0) continue;
+        if (story_ ? !flagsHold(r.show, r.slot) : slotsDone.count(r.slot) > 0) continue;
+        slotsDone.insert(r.slot);
+        if (story_ && story_->hasActorSlot(sid, r.slot)) continue;  // the story's own version of this NPC
+        NpcRt n;
+        n.def.kind = NpcKind::Talk;
+        n.def.x = r.x;
+        n.def.y = r.y;
+        n.def.dir = r.dir & 7;
+        n.origSlot = r.slot;
+        n.hidden = r.sprite == "-";
+        if (!n.hidden) {
+            n.def.sprite = r.sprite;
+            n.actor.sprite = sprites_.get(r.sprite);
+            if (!n.actor.sprite) continue;
+        }
+        n.actor.x = float(r.x);
+        n.actor.y = float(r.y);
+        n.actor.dir = Dir(r.dir & 7);
+        n.actor.tick();
+        if (n.actor.sprite && n.actor.anim < 0) {
+            const auto& anims = n.actor.sprite->pack.anims;
+            for (size_t a = 0; a < anims.size(); ++a)
+                if (!anims[a].keys.empty()) { n.actor.anim = int(a); break; }
+        }
         npcs_.push_back(std::move(n));
     }
     if (story_) {
@@ -336,6 +349,22 @@ void Field::buildNpcs() {
             NpcRt n;
             n.def = sa->def;
             n.storyId = sa->id;
+            if (sa->slot >= 0) {  // the original NPC of that slot: its sprite, position and facing
+                const NpcRecord* best = nullptr;
+                for (const auto& r : origNpcs_) {
+                    if (r.slot != sa->slot || (r.x == 0 && r.y == 0) || r.sprite == "-") continue;
+                    if (!best) best = &r;
+                    if (flagsHold(r.show, r.slot)) { best = &r; break; }
+                }
+                if (!best) continue;
+                n.def.sprite = best->sprite;
+                if (sa->def.x < 0) {  // `slot N at X Y DIR` keeps its own spot
+                    n.def.x = best->x;
+                    n.def.y = best->y;
+                    n.def.dir = best->dir & 7;
+                }
+                n.origSlot = sa->slot;
+            }
             n.actor.sprite = sprites_.get(n.def.sprite);
             n.actor.x = float(n.def.x);
             n.actor.y = float(n.def.y);
@@ -344,6 +373,13 @@ void Field::buildNpcs() {
             npcs_.push_back(std::move(n));
         }
     }
+}
+
+bool Field::flagsHold(const std::vector<FlagCond>& l, int slot) const {
+    if (!story_) return l.empty();
+    for (const auto& c : l)
+        if (story_->gflag(Story::gkey(stageIds_[stageIndex_], slot, c.flag)) != c.value) return false;
+    return true;
 }
 
 void Field::startTalk(size_t i) {
@@ -399,7 +435,7 @@ bool Field::walkable(float x, float y) const {
     if (data_.isWall(ix, iy) || data_.isWall(ix - 4, iy) || data_.isWall(ix + 4, iy) || data_.isWall(ix, iy - 2))
         return false;
     for (const auto& n : npcs_)  // talk NPCs are solid
-        if (!n.defeated && n.def.kind == NpcKind::Talk && dist(x, y, n.actor.x, n.actor.y) < 9.f) return false;
+        if (!n.defeated && n.def.kind == NpcKind::Talk && dist(x, y, n.actor.x, n.actor.y) < (n.hidden ? 12.f : 9.f)) return false;
     return true;
 }
 
@@ -507,23 +543,36 @@ void Field::update(const Input& in) {
         statusTimer_ = 120;
     }
 
-    // ---- stage transition fade ----
-    if (fade_ > 0) {
-        if (fadingOut_) {
-            if (++fade_ >= kFadeTicks) {
-                auto it = std::find(stageIds_.begin(), stageIds_.end(), pendingExit_.target);
-                if (it != stageIds_.end() && loadStage(size_t(it - stageIds_.begin()), err, pendingExit_.arriveX, pendingExit_.arriveY) &&
-                    !dev_)
-                    saveStory();  // PC flow: autosave on every area change (Continue resumes here)
-                fadingOut_ = false;
-                fade_ = kFadeTicks;
-            }
-        } else {
-            --fade_;
-        }
+    // ---- door / exit sequence, port effect ----
+    if (seq_.phase >= 0) {
+        updateDoorSeq(in);
         player_.move = partner_.move = Move::Idle;
         player_.tick();
         partner_.tick();
+        for (auto& f : followers_) { f.move = Move::Idle; f.tick(); }
+        return;
+    }
+    if (portT_ >= 0) {
+        ++portT_;
+        player_.move = Move::Idle;
+        player_.tick();
+        for (auto& a : anims_)
+            if (a.pieces.size() > 1 && ++a.timer >= a.delay) { a.timer = 0; a.cur = (a.cur + 1) % a.pieces.size(); }
+        if (portT_ >= kPortTicks) {
+            const Port& pt = ports_[size_t(portIdx_)];
+            portT_ = -1;
+            if (!pt.target.empty()) {
+                DoorRecord d;
+                d.kind = 1;
+                d.target = pt.target;
+                d.x = pt.tx;
+                d.y = pt.ty;
+                d.dir = -1;
+                enterDoor(d);
+                seq_.phase = 1;  // no door piece: straight to the wipe
+            }
+        }
+        updateCamera();
         return;
     }
 
@@ -599,15 +648,40 @@ void Field::update(const Input& in) {
     for (auto& n : npcs_) n.actor.tick();
 
     if (!editor_) {
-        // ---- talk ----
+        // ---- doors: standing in a door zone shows the arrow; U / Enter goes through (never by walking) ----
+        const int door = playerDoor();
+        if (door >= 0 && in.confirmP) {
+            const DoorRecord& d = doors_[size_t(door)];
+            std::string msg;
+            if (story_ && story_->exitBlocked(stageId(), d.target, msg)) story_->sayRef(msg, "", msg);
+            else enterDoor(d);
+            updateCamera();
+            return;
+        }
+        // ---- ports: stepping on one (or U / Enter on it) opens it ----
+        const int port = portAt(player_.x, player_.y);
+        if (port >= 0 && (port != lastPort_ || in.confirmP)) {
+            portIdx_ = port;
+            portT_ = 0;
+            lastPort_ = port;
+            updateCamera();
+            return;
+        }
+        lastPort_ = port;
+        // ---- talk: the nearest NPC in reach, preferring the one the player faces ----
         if (in.confirmP) {
             int best = -1;
-            float bestD = kTalkRange;
+            float bestScore = 1e9f;
+            float fx, fy;
+            dirVector(player_.dir, fx, fy);
             for (size_t i = 0; i < npcs_.size(); ++i) {
                 const auto& n = npcs_[i];
-                if (n.defeated || n.def.kind != NpcKind::Talk) continue;
-                float d = dist(player_.x, player_.y, n.actor.x, n.actor.y);
-                if (d < bestD) { bestD = d; best = int(i); }
+                if (n.defeated || n.hidden || n.def.kind != NpcKind::Talk) continue;
+                const float dx = n.actor.x - player_.x, dy = n.actor.y - player_.y, d = dist(0, 0, dx, dy);
+                if (d >= kTalkRange) continue;
+                const float facing = d > 0.f ? (dx * fx + dy * fy) / (d * std::max(0.01f, dist(0, 0, fx, fy))) : 1.f;
+                const float score = d - 12.f * facing;
+                if (score < bestScore) { bestScore = score; best = int(i); }
             }
             if (best >= 0) startTalk(size_t(best));
         }
@@ -632,25 +706,282 @@ void Field::update(const Input& in) {
                 }
             }
         }
-        // ---- exits ----
         if (story_) story_->onEnter(stageId(), player_.x, player_.y);
-        for (const auto& e : data_.exits) {
-            if (player_.x >= e.x && player_.x < e.x + e.w && player_.y >= e.y && player_.y < e.y + e.h) {
-                std::string msg;
-                if (story_ && story_->exitBlocked(stageId(), e.target, msg)) {
-                    player_.x = prevX;  // step back out of the exit zone
-                    player_.y = prevY;
-                    story_->sayRef(msg, "", msg);  // a message ref (dmg200:8:1) or our own text
-                    break;
-                }
-                pendingExit_ = e;
-                fadingOut_ = true;
-                fade_ = 1;
-                break;
-            }
-        }
     }
     updateCamera();
+}
+
+// ------------------------------------------------------------------ doors
+
+// The usable warp under (x, y): extracted stages use the trigger map (zone value & 31 = link index), our own
+// stages the .stage exit rectangles. Event zones (kind 8) are handled by the story's gates.
+int Field::doorAt(float x, float y) const {
+    if (origDoors_) {
+        const int v = fstage_.triggerAt(int(x), int(y));
+        if (!v) return -1;
+        for (size_t i = 0; i < doors_.size(); ++i) {
+            const DoorRecord& d = doors_[i];
+            if (d.index == (v & 31) && d.kind == 1 && flagsHold(d.cond) &&
+                std::find(stageIds_.begin(), stageIds_.end(), d.target) != stageIds_.end())
+                return int(i);
+        }
+        return -1;
+    }
+    for (size_t i = 0; i < data_.exits.size() && i < doors_.size(); ++i) {
+        const auto& e = data_.exits[i];
+        if (x >= e.x && x < e.x + e.w && y >= e.y && y < e.y + e.h) return int(i);
+    }
+    return -1;
+}
+
+// The door the player can use now: standing in its zone or right next to it (the original drops the player just
+// outside the zone on arrival and already shows the arrow there: reference shots 38 and 49). The facing direction
+// is tried first.
+int Field::playerDoor() const {
+    const int d = doorAt(player_.x, player_.y);
+    if (d >= 0) return d;
+    for (int k = 0; k < 8; ++k) {
+        float fx, fy;
+        dirVector(Dir((int(player_.dir) + k) & 7), fx, fy);
+        const float len = std::max(0.01f, dist(0, 0, fx, fy));
+        for (float r = 5.f; r <= 15.f; r += 5.f) {
+            const int f = doorAt(player_.x + fx / len * r, player_.y + fy / len * r);
+            if (f >= 0) return f;
+        }
+    }
+    return -1;
+}
+
+void Field::enterDoor(const DoorRecord& d) {
+    seq_ = {};
+    seq_.door = d;
+    seq_.phase = 0;
+    seq_.t = 0;
+    const auto it = areaNames_.find(d.target);
+    const std::string name = it != areaNames_.end() ? it->second : d.target;
+    const size_t sl = name.find(" / ");
+    seq_.city = sl == std::string::npos ? "" : name.substr(0, sl);
+    seq_.area = sl == std::string::npos ? name : name.substr(sl + 3);
+}
+
+bool Field::arriveThrough(const DoorRecord& d, std::string& err) {
+    auto it = std::find(stageIds_.begin(), stageIds_.end(), d.target);
+    if (it == stageIds_.end()) { err = "no stage " + d.target; return false; }
+    if (!loadStage(size_t(it - stageIds_.begin()), err, d.x, d.y)) return false;
+    if (d.dir >= 0) player_.dir = Dir(d.dir & 7);
+    return true;
+}
+
+void Field::updateDoorSeq(const Input& in) {
+    ++seq_.t;
+    for (auto& a : anims_)
+        if (a.pieces.size() > 1 && ++a.timer >= a.delay) { a.timer = 0; a.cur = (a.cur + 1) % a.pieces.size(); }
+    switch (seq_.phase) {
+        case 0:  // the door piece opens (no door piece: a short pause)
+            if (seq_.t >= kDoorOpenTicks) { seq_.phase = 1; seq_.t = 0; }
+            break;
+        case 1:  // tile wipe covers the screen, then the new stage loads under it
+            if (seq_.t >= kWipeTicks) {
+                std::string err;
+                if (arriveThrough(seq_.door, err) && !dev_) saveStory();  // PC flow: autosave on every area change
+                seq_.phase = 2;
+                seq_.t = 0;
+            }
+            break;
+        case 2:  // area card ("Asuka City" / "Main Lobby"); U / Enter skips it
+            if (seq_.t >= kCardTicks || (seq_.t > 20 && in.confirmP)) { seq_.phase = 3; seq_.t = 0; }
+            break;
+        default:  // card fades into the new area
+            if (seq_.t >= kCardOutTicks) {
+                seq_.phase = -1;
+                if (story_ && !pendingStage_.empty()) story_->onStage(pendingStage_);
+                pendingStage_.clear();
+            }
+            break;
+    }
+    updateCamera();
+}
+
+// Tile wipe (reference shot 08) and area card (shots 37, 48, 52): drawn over the 320x240 field view; the
+// card's text is drawn in renderHud.
+void Field::renderDoorSeq() {
+    const uint32_t navy = rgba(6, 8, 30), line = rgba(70, 80, 200);
+    auto tiles = [&](float k) {  // k 0..1: share of tiles shown (diagonal sweep from the top-left)
+        constexpr int tw = 32, th = 30;
+        for (int ty = 0; ty < kScreenH / th + 1; ++ty)
+            for (int tx = 0; tx < kScreenW / tw; ++tx) {
+                const float order = float(tx + ty) / float(kScreenW / tw + kScreenH / th);
+                const float a = std::clamp((k * 1.6f - order) * 4.f, 0.f, 1.f);
+                if (a <= 0.f) continue;
+                const float x = float(tx * tw), y = float(ty * th);
+                gfx::fillRect(x, y, tw, th, rgba(6, 8, 30, uint8_t(255 * a)));
+                gfx::strokeRect(x + 1, y + 1, tw - 2, th - 2, rgba(50, 60, 170, uint8_t(255 * a)));
+                // the circuit trace of each tile
+                gfx::fillRect(x + 4, y + 8, 8, 1, rgba(60, 70, 210, uint8_t(200 * a)));
+                for (int k2 = 0; k2 < 6; ++k2) gfx::fillRect(x + 12 + k2, y + 8 + k2, 1, 1, rgba(60, 70, 210, uint8_t(200 * a)));
+                gfx::fillRect(x + 18, y + 14, 9, 1, rgba(60, 70, 210, uint8_t(200 * a)));
+            }
+    };
+    if (seq_.phase == 1) { tiles(float(seq_.t) / float(kWipeTicks)); return; }
+    if (seq_.phase == 0) return;
+    const float out = seq_.phase == 3 ? 1.f - float(seq_.t) / float(kCardOutTicks) : 1.f;
+    const float in = seq_.phase == 2 ? std::min(1.f, float(seq_.t) / 14.f) : 1.f;
+    const uint8_t A = uint8_t(255 * out);
+    gfx::fillRect(0, 0, kScreenW, kScreenH, rgba(0, 0, 0, A));
+    const uint32_t cyan = rgba(40, 210, 235, A), blue = rgba(60, 60, 210, A), deep = rgba(4, 6, 120, A);
+    (void)navy;
+    (void)line;
+    // the band (city) and the box (area) slide in from the right, the vertical lines from the left
+    const float bx = kScreenW * (1.f - in);
+    gfx::fillRect(bx, 63, kScreenW, 14, deep);
+    gfx::fillRect(bx, 77, kScreenW, 16, blue);
+    gfx::fillRect(bx, 83, kScreenW, 1, cyan);
+    gfx::fillRect(bx + 125, 12, 116, 26, deep);
+    gfx::fillRect(bx + 125, 38, 116, 5, blue);
+    gfx::fillRect(bx + 124, 37, kScreenW, 1, cyan);
+    const float vx = -40.f + 54.f * in;
+    gfx::fillRect(vx, 0, 1, kScreenH, cyan);
+    gfx::fillRect(vx + 13, 0, 9, kScreenH, blue);
+    gfx::fillRect(vx + 18, 0, 1, kScreenH, cyan);
+    gfx::fillRect(kScreenW - 93.f * in, 0, 1, kScreenH, cyan);
+}
+
+void Field::loadDoorMark() {
+    Bytes b;
+    UiPack pk;
+    if (!readFile(root_ / "DAT" / "FIELD" / "FIELDCOM.BIN", b) || !loadUiPack(b, pk) || pk.cells.empty()) return;
+    const UiTexGroup& tex = pk.tex[size_t(pk.texFor[0])];
+    for (int p = kMarkFirst; p < kMarkFirst + kMarkFrames; ++p) {
+        Image img;
+        MarkFrame m;
+        if (!renderUiPiece(tex, pk.cells[0], p, img, m.ox, m.oy)) continue;
+        m.tex = gfx::upload(img);
+        doorMark_.push_back(m);
+    }
+}
+
+void Field::loadAreaNames() {
+    std::ifstream f(stageDir_.parent_path() / "areas.cfg");
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string id, name;
+        is >> id >> std::ws;
+        std::getline(is, name);
+        if (!name.empty() && name.back() == '\r') name.pop_back();
+        if (name.size() >= 2 && name.front() == '"') name = name.substr(1, name.find('"', 1) - 1);
+        if (!id.empty()) areaNames_[id] = name;
+    }
+}
+
+// data/ports.cfg (ours): port STAGE X Y [RADIUS] [-> TARGET X Y]
+void Field::loadPorts() {
+    std::ifstream f(stageDir_.parent_path() / "ports.cfg");
+    std::string line;
+    while (std::getline(f, line)) {
+        std::istringstream is(line);
+        std::string k;
+        if (!(is >> k) || k != "port") continue;
+        Port p;
+        if (!(is >> p.stage >> p.x >> p.y)) continue;
+        std::string w;
+        while (is >> w) {
+            if (w == "->") is >> p.target >> p.tx >> p.ty;
+            else p.r = std::atoi(w.c_str());
+        }
+        ports_.push_back(p);
+    }
+}
+
+int Field::portAt(float x, float y) const {
+    for (size_t i = 0; i < ports_.size(); ++i) {
+        const Port& p = ports_[i];
+        if (p.stage != stageIds_[stageIndex_]) continue;
+        const float dx = x - float(p.x), dy = (y - float(p.y)) * 2.f;  // iso ellipse
+        if (dx * dx + dy * dy < float(p.r * p.r)) return int(i);
+    }
+    return -1;
+}
+
+int Field::doorSelfTest(const std::vector<std::string>& stages, std::vector<std::string>& report) {
+    int fails = 0;
+    char b[256];
+    auto zoneSpot = [&](int index, float& ox, float& oy) {  // a walkable pixel of trigger zone `index`
+        for (int y = 0; y < fstage_.h; y += 2)
+            for (int x = 0; x < fstage_.w; x += 2) {
+                const int v = fstage_.triggerAt(x, y);
+                if (v && (v & 31) == index && walkable(float(x), float(y))) { ox = float(x); oy = float(y); return true; }
+            }
+        return false;
+    };
+    for (const auto& st : stages) {
+        if (!warpTo(st, -1, -1)) { report.push_back("FAIL " + st + ": cannot load"); ++fails; continue; }
+        const std::vector<DoorRecord> list = doors_;
+        for (const auto& d : list) {
+            if (d.kind != 1) continue;
+            if (!warpTo(st, -1, -1)) break;
+            float x, y;
+            if (!zoneSpot(d.index, x, y)) {
+                std::snprintf(b, sizeof b, "FAIL %s zone %d -> %s: no walkable spot in the trigger zone", st.c_str(), d.index, d.target.c_str());
+                report.push_back(b); ++fails; continue;
+            }
+            placeParty(x, y);
+            const int here = doorAt(player_.x, player_.y);
+            if (here < 0) {
+                std::snprintf(b, sizeof b, "SKIP %s zone %d -> %s: closed now (condition %s) or target stage missing", st.c_str(), d.index,
+                              d.target.c_str(), flagListText(d.cond).c_str());
+                report.push_back(b); continue;
+            }
+            std::string err;
+            const DoorRecord go = doors_[size_t(here)];
+            if (!arriveThrough(go, err) || stageId() != d.target) {
+                std::snprintf(b, sizeof b, "FAIL %s zone %d: did not arrive in %s (%s)", st.c_str(), d.index, d.target.c_str(), err.c_str());
+                report.push_back(b); ++fails; continue;
+            }
+            // The original drops the player just OUTSIDE the matching door's zone (so it does not fire again):
+            // the door back must be within a step of the arrival point.
+            const int ax = int(player_.x), ay = int(player_.y);
+            if (!fstage_.hasTrigger) {
+                std::snprintf(b, sizeof b, "SKIP %s zone %d -> %s: arrived at %d,%d, but %s has no decoded trigger map (no doors to test)",
+                              st.c_str(), d.index, d.target.c_str(), ax, ay, d.target.c_str());
+                report.push_back(b);
+                continue;
+            }
+            auto nearDoor = [&](int cx, int cy, const std::string& to, int& zone) {
+                int best = -1, bestD = 1 << 30;
+                for (int y = cy - 16; y <= cy + 16; ++y)
+                    for (int x = cx - 16; x <= cx + 16; ++x) {
+                        const int i = doorAt(float(x), float(y));
+                        const int dd = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+                        if (i >= 0 && doors_[size_t(i)].target == to && dd < bestD) { bestD = dd; best = i; }
+                    }
+                zone = best >= 0 ? doors_[size_t(best)].index : -1;
+                return best;
+            };
+            int zoneBack = -1;
+            const int back = nearDoor(ax, ay, st, zoneBack);
+            if (back < 0) {
+                std::snprintf(b, sizeof b, "FAIL %s zone %d -> %s at %d,%d: no door back to %s within 16 px", st.c_str(), d.index,
+                              d.target.c_str(), ax, ay, st.c_str());
+                report.push_back(b); ++fails; continue;
+            }
+            const DoorRecord ret = doors_[size_t(back)];
+            if (!arriveThrough(ret, err) || stageId() != st) {
+                std::snprintf(b, sizeof b, "FAIL %s zone %d -> %s -> back: arrived in %s", st.c_str(), d.index, d.target.c_str(), stageId().c_str());
+                report.push_back(b); ++fails; continue;
+            }
+            int zoneHere = -1;
+            nearDoor(int(player_.x), int(player_.y), d.target, zoneHere);
+            const bool same = zoneHere == d.index;
+            std::snprintf(b, sizeof b, "%s %s zone %d -> %s (arrive %d,%d next to its zone %d) -> back at %d,%d %s", same ? "PASS" : "FAIL",
+                          st.c_str(), d.index, d.target.c_str(), ax, ay, ret.index, int(player_.x), int(player_.y),
+                          same ? "next to the same door" : "NOT next to the door it was entered from");
+            report.push_back(b);
+            if (!same) ++fails;
+        }
+    }
+    return fails;
 }
 
 // ------------------------------------------------------------------ editor
@@ -772,9 +1103,18 @@ void Field::renderEditor() {
 
 void Field::render() {
     gfx::drawTexture(stageTex_, -camX_, -camY_);
-    for (const auto& a : anims_) {  // original animated scene pieces and glows
+    const bool opening = seq_.phase == 0 && seq_.door.link >= 0x64;
+    for (const auto& a : anims_) {  // original animated scene pieces and glows (foreground pieces: below)
+        if (a.depthY) continue;
         const PieceTex* pt = pieceTex(a.pieces[a.cur]);
         if (!pt) continue;
+        if (a.link && opening && a.link == seq_.door.link) {  // the door opens: its panel fades into the doorway
+            const float k = std::min(1.f, float(seq_.t) / float(kDoorOpenTicks - 4));
+            const float x = float(a.x + pt->ox) - camX_, y = float(a.y + pt->oy) - camY_;
+            gfx::drawTexture(pt->tex, x, y - 3.f * k, false, 1.f - k);
+            gfx::drawGlow(x + pt->tex.w / 2.f, y + pt->tex.h / 2.f, 10.f + 14.f * k, rgba(150, 210, 255, uint8_t(120 * k)));
+            continue;
+        }
         const float x = float(a.x + pt->ox) - camX_, y = float(a.y + pt->oy) - camY_;
         if (x > kScreenW || y > kScreenH || x + pt->tex.w < 0 || y + pt->tex.h < 0) continue;
         if (a.additive) gfx::drawSprite(pt->tex, x, y, false, 1.f, 0xffffffffu, true);
@@ -784,14 +1124,22 @@ void Field::render() {
     // painter's order by feet Y
     struct Item { float y; int kind; size_t idx; };
     std::vector<Item> order{{player_.y, 0, 0}};
+    for (size_t i = 0; i < anims_.size(); ++i)  // foreground pieces sort with the actors by their line
+        if (anims_[i].depthY) order.push_back({float(anims_[i].depthY), 4, i});
     if (partnersVisible()) {
         order.push_back({partner_.y, 1, 0});
         for (size_t i = 0; i < followers_.size(); ++i) order.push_back({followers_[i].y, 3, i});
     }
     for (size_t i = 0; i < npcs_.size(); ++i)
-        if (!npcs_[i].defeated) order.push_back({npcs_[i].actor.y, 2, i});
+        if (!npcs_[i].defeated && !npcs_[i].hidden) order.push_back({npcs_[i].actor.y, 2, i});
     std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.y < b.y; });
     for (const auto& o : order) {
+        if (o.kind == 4) {
+            const auto& a = anims_[o.idx];
+            if (const PieceTex* pt = pieceTex(a.pieces[a.cur]))
+                gfx::drawTexture(pt->tex, float(a.x + pt->ox) - camX_, float(a.y + pt->oy) - camY_);
+            continue;
+        }
         if (o.kind == 0) player_.draw(camX_, camY_);
         else if (o.kind == 1 || o.kind == 3) {
             const Actor& a = o.kind == 1 ? partner_ : followers_[o.idx];
@@ -824,12 +1172,34 @@ void Field::render() {
     }
     if (editor_) renderEditor();
 
+    // port opening: rings of light rise from the pad, a column flashes
+    if (portT_ >= 0 && portIdx_ >= 0) {
+        const Port& pt = ports_[size_t(portIdx_)];
+        const float cx = float(pt.x) - camX_, cy = float(pt.y) - camY_, t = float(portT_) / float(kPortTicks);
+        const float col = std::sin(std::min(1.f, t * 1.4f) * 3.14159f);
+        gfx::drawGlow(cx, cy, 18.f + 10.f * col, rgba(90, 220, 255, uint8_t(150 * col)));
+        gfx::fillRect(cx - 6, cy - 60 * col, 12, 60 * col, rgba(150, 230, 255, uint8_t(90 * col)));
+        for (int k = 0; k < 4; ++k) {
+            const float rt = std::fmod(t * 2.f + float(k) * 0.25f, 1.f);
+            const float ry = cy - 50.f * rt, rw = 26.f * (1.f - 0.4f * rt);
+            gfx::strokeRect(cx - rw / 2, ry - rw / 4, rw, rw / 2, rgba(180, 240, 255, uint8_t(220 * (1.f - rt) * col)));
+        }
+    }
+    // the door arrow over the player (reference shot 38): U / Enter goes through
+    const bool cine = story_ && story_->busy();
+    if (!editor_ && !cine && seq_.phase < 0 && portT_ < 0 && playerDoor() >= 0) {
+        if (!doorMark_.empty()) {  // the original marker frames (timing: our guess, see FORMATS.md)
+            const MarkFrame& m = doorMark_[size_t(ticks_ / kMarkTicks) % doorMark_.size()];
+            gfx::drawTexture(m.tex, std::floor(player_.x - camX_) + float(m.ox), std::floor(player_.y - camY_) + float(m.oy));
+        }
+    }
+    if (seq_.phase >= 0) renderDoorSeq();
+
     if (story_ && !editor_) story_->render();
     if (talkNpc_ >= 0) {
         gfx::fillRect(12, 168, 296, 62, 0xd8301808u);
         gfx::strokeRect(12, 168, 296, 62, 0xffc0e0ffu);
     }
-    if (fade_ > 0) gfx::fillRect(0, 0, kScreenW, kScreenH, rgba(0, 0, 0, uint8_t(255 * fade_ / kFadeTicks)));
 }
 
 void Field::renderHud(int ww, int wh) {
@@ -837,8 +1207,8 @@ void Field::renderHud(int ww, int wh) {
     const bool cine = story_ && story_->busy() && !editor_;  // story scene: keep the screen clean
     // NPC labels
     for (const auto& n : npcs_) {
-        if (cine) break;
-        if (n.defeated && !editor_) continue;
+        if (cine || seq_.phase >= 0 || portT_ >= 0) break;
+        if ((n.defeated || n.hidden) && !editor_) continue;
         int wx, wy;
         float top = n.def.kind == NpcKind::Boss ? 52.f : 38.f;
         gfx::toWindow(n.actor.x - camX_, n.actor.y - camY_ - top, wx, wy);
@@ -856,8 +1226,8 @@ void Field::renderHud(int ww, int wh) {
 
     if (hud_ && !cine && !dev_) {
         gfx::drawText(10, wh - 12,
-                      party_.team.size() > 1 && party_.partnersOut ? "Move: WASD/Arrows  Run: Shift  Talk: U or Enter  Partner: Tab  Menu: Esc  HUD: F1"
-                                             : "Move: WASD/Arrows  Run: Shift  Talk: U or Enter  Menu: Esc  HUD: F1",
+                      party_.team.size() > 1 && party_.partnersOut ? "Move: WASD/Arrows  Run: Shift  Talk/Door: U or Enter  Partner: Tab  Menu: Esc  HUD: F1"
+                                             : "Move: WASD/Arrows  Run: Shift  Talk/Door: U or Enter  Menu: Esc  HUD: F1",
                       0xffb0e0ffu);
     }
     if (hud_ && !cine && dev_) {
@@ -867,7 +1237,7 @@ void Field::renderHud(int ww, int wh) {
         gfx::drawText(10, 20, line);
         if (!editor_)
             gfx::drawText(10, wh - 12,
-                          "Move: WASD/Arrows  Run: Shift  Talk: U or Enter  Stage: PgUp/PgDn  Editor: F2  HUD: F1",
+                          "Move: WASD/Arrows  Run: Shift  Talk/Door: U or Enter  Stage: PgUp/PgDn  Editor: F2  HUD: F1",
                           0xffb0e0ffu);
     }
     if (editor_) {
@@ -884,6 +1254,16 @@ void Field::renderHud(int ww, int wh) {
     }
     if (statusTimer_ > 0 && !cine) gfx::drawTextCentered(ww / 2, 46 + (editor_ ? 110 : 0), status_.c_str(), 0xff60ffffu);
 
+    if (seq_.phase >= 2) {  // area card text
+        const float in = seq_.phase == 2 ? std::min(1.f, float(seq_.t) / 14.f) : 1.f;
+        const uint8_t a = uint8_t(255 * (seq_.phase == 3 ? 1.f - float(seq_.t) / float(kCardOutTicks) : 1.f));
+        const float bx = kScreenW * (1.f - in);
+        int x, y;
+        gfx::toWindow(bx + 40, 64, x, y);  // band: the city
+        gfx::drawText(x, y, (seq_.city.empty() ? seq_.area : seq_.city).c_str(), (uint32_t(a) << 24) | 0x00ffffffu);
+        gfx::toWindow(bx + 129, 22, x, y);  // box: the area
+        if (!seq_.city.empty()) gfx::drawText(x, y, seq_.area.c_str(), (uint32_t(a) << 24) | 0x00ffffffu);
+    }
     if (story_ && !editor_) story_->renderHud(ww, wh);
     if (talkNpc_ >= 0) {
         int x, y;

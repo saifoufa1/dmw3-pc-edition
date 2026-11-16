@@ -1,5 +1,7 @@
 #include "game/game.h"
 
+#include <fstream>
+
 #include <algorithm>
 #include <cmath>
 
@@ -44,6 +46,14 @@ bool Game::init(const std::filesystem::path& dataRoot, const std::filesystem::pa
         }
     }
     if (!field_.init(dataRoot, stageDir, stage, err)) return false;
+    if (!dbg.doorTest.empty()) {  // every door of Asuka City's lobby area, both ways, with the game's own door code
+        std::vector<std::string> report;
+        doorTestFails_ = field_.doorSelfTest({"S210", "S200", "S220", "S225", "S230"}, report);
+        std::ofstream f(dbg.doorTest);
+        for (const auto& l : report) f << l << "\n";
+        f << (doorTestFails_ ? "FAILED: " : "OK: ") << doorTestFails_ << " failure(s)\n";
+        return true;
+    }
     if (dbg.posX >= 0) field_.warpTo(field_.stageId(), dbg.posX, dbg.posY);
     else if (sx >= 0 && field_.stageId() == stage) field_.warpTo(stage, sx, sy);
     field_.reloadPartner();
@@ -86,6 +96,7 @@ bool Game::initFlow(const std::filesystem::path& dataRoot, const std::filesystem
         party_.pack = fs.pack;
         party_.partnersOut = false;  // downloaded at the Tamer Service counter (story event "download")
         if (!party_.setActive(0)) { err = "starter pack has no Digimon"; return false; }
+        if (sx < 0 && stage == story_.startStage()) { sx = story_.startX(); sy = story_.startY(); }  // story `start`
     } else {
         if (!story_.loadGame(Story::defaultSavePath(), stage, sx, sy)) {
             err = "cannot load " + Story::defaultSavePath().string();

@@ -144,19 +144,37 @@ bool Story::load(const fs::path& file, TextDb* text, std::string& err) {
             size_t i = 4;
             if (i < t.size() && t[i] == "if") g.when = parseConds(t, i + 1);
             gates_.push_back(g);
-        } else if (k == "actor" && t.size() >= 9) {
+        } else if (k == "actor" && (t.size() >= 9 || (t.size() >= 7 && t[4] == "slot"))) {
             // actor ID STAGE talk|fight|boss SPRITE X Y DIR "Name" [level N] [line REF|"text"] [if CONDS...]
+            // actor ID STAGE talk|fight|boss slot N "Name" ...   = the ORIGINAL NPC of that actor slot
+            //                                                      (data/npcs: its sprite, position and facing)
+            // actor ID STAGE talk slot N at X Y DIR "Name" ...     = that NPC's sprite at a spot of an event scene
             StoryActor a;
             a.id = t[1];
             a.stage = t[2];
             a.def.kind = t[3] == "fight" ? NpcKind::Fight : t[3] == "boss" ? NpcKind::Boss : NpcKind::Talk;
-            a.def.sprite = t[4];
-            a.def.x = toInt(t[5]);
-            a.def.y = toInt(t[6]);
-            a.def.dir = toInt(t[7]) & 7;
-            a.def.name = unq(t[8]);
+            size_t first = 9;
+            if (t[4] == "slot") {
+                a.slot = toInt(t[5]);
+                a.def.x = a.def.y = -1;
+                size_t n = 6;
+                if (t.size() >= 11 && t[6] == "at") {
+                    a.def.x = toInt(t[7]);
+                    a.def.y = toInt(t[8]);
+                    a.def.dir = toInt(t[9]) & 7;
+                    n = 10;
+                }
+                a.def.name = unq(t[n]);
+                first = n + 1;
+            } else {
+                a.def.sprite = t[4];
+                a.def.x = toInt(t[5]);
+                a.def.y = toInt(t[6]);
+                a.def.dir = toInt(t[7]) & 7;
+                a.def.name = unq(t[8]);
+            }
             a.def.level = 1;
-            for (size_t i = 9; i < t.size(); ++i) {
+            for (size_t i = first; i < t.size(); ++i) {
                 if (t[i] == "level" && i + 1 < t.size()) a.def.level = toInt(t[++i], 1);
                 else if (t[i] == "line" && i + 1 < t.size()) a.def.text = t[++i];
                 else if (t[i] == "enemy" && i + 2 < t.size()) { a.enemySprite = t[i + 1]; a.enemyName = unq(t[i + 2]); i += 2; }
@@ -342,7 +360,13 @@ std::vector<const StoryActor*> Story::actorsOn(const std::string& stage) const {
 
 bool Story::hasActorAt(const std::string& stage, int x, int y) const {
     for (const auto& a : actors_)
-        if (a.stage == stage && std::abs(a.def.x - x) < 8 && std::abs(a.def.y - y) < 8) return true;
+        if (a.stage == stage && a.slot < 0 && std::abs(a.def.x - x) < 8 && std::abs(a.def.y - y) < 8) return true;
+    return false;
+}
+
+bool Story::hasActorSlot(const std::string& stage, int slot) const {
+    for (const auto& a : actors_)
+        if (a.stage == stage && a.slot == slot && eval(a.when)) return true;
     return false;
 }
 

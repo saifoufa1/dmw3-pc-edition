@@ -15,29 +15,35 @@ Last updated: 2026-11-16 by Claude (field agent).
 
 ### Field work — on `main`
 Owner's list: (1) NPCs from the disc data, Tamer Service clerk in the right place; (2) symmetric doors + a both-ways
-door test; (3) red arrow bubble at a door, U/Enter goes through; (4) U/Enter = talk/confirm everywhere, Esc (and
-Backspace) = back; (5) door transition + teleport port animation; (6) topmost test window (done: a6b73d1).
+door test; (3) the ORIGINAL door marker over the player, U/Enter goes through; (4) U/Enter = talk/confirm
+everywhere, Esc (and Backspace) = back; (5) door transition + teleport port animation; (6) topmost test window
+(done: a6b73d1).
 
 **Why it was wrong:** NPC sprites used `charId & 0xFF` as the `P###` number (wrong: charId indexes a FIELDSTG table
 of file ids), extra story NPCs were hand-placed on top, and every door target was hand-picked (the lobby's lower-right
-walkway really leads to S220, the west corridor to the Central Sector S200). The original data has all of it: see
-docs/FORMATS.md "Area link table", "FIELDSTG.PRO tables", "File ids".
+walkway really leads to S220, the west corridor to the Central Sector's dragon gate). The original data has all of
+it: docs/FORMATS.md "Area link table", "FIELDSTG.PRO tables", "File ids", "Field common effects".
 
 **Done**
 - Extraction (`3c12ebf`): `dw3check --dump-npcs S210`, `--extract-npcs data`, `--map-file-ids`;
   `data/file_ids.cfg` (names only, committed); `data/npcs/S###.npc` + `data/doors/S###.door` are generated from the
   player's own game data by `build.bat` (git-ignored, never pushed). dw3check checks every warp target exists.
-- Keys (`KEYS`): U added to `confirm` (win32_main.cpp `poll`), Backspace = back in the app.cpp menus, hint texts.
+- Keys (`c594337`): U added to `confirm` (win32_main.cpp `poll`), Backspace = back in the app.cpp menus, hint texts.
+- Field (`FIELD`): NPCs only from data/npcs (story actors bind to original slots: `actor ... slot N [at X Y DIR]`),
+  counter fronts depth-sorted (clerks behind the counter), doors from data/doors via the trigger zones, the
+  original door marker (FIELDCOM pieces 35-38, `Field::loadDoorMark`), U/Enter uses a door (`Field::playerDoor`,
+  never by walking), door sequence: door panel opens -> tile wipe -> area card (band = city, box = area) -> scene;
+  ports (`data/ports.cfg`, S225 login pads, our light effect); story phase flags 6002 -> 6003 (Genji) -> 6004
+  (exclusive). `dmw3 --door-test OUT.txt`: 16 PASS, 1 SKIP (S235 has no decoded trigger map), 0 failures.
+  Screenshots: C:\DW3_Project\reference\pc\round2\ (owner PC only).
 
-**Half-done (in the working tree of the field agent, not committed yet)**
-- `src/game/field.cpp/.h`: NPCs only from data/npcs, doors from data/doors via trigger zones, arrow bubble
-  (`Field::playerDoor`), U/Enter door use, door sequence (door opens -> tile wipe -> area card), ports
-  (`data/ports.cfg`), `Field::doorSelfTest` run by `dmw3 --door-test OUT.txt` (passes: 16 PASS, 1 SKIP = S235 has
-  no decoded trigger map). `data/story/chapter1.story` uses the original slots (`actor ... slot N`).
-  Tested so far: lobby arrival without partners + arrow, Tamer Service talk behind the counter -> download prompt.
+**Open**
+- S235 (behind S200 zone 4): its TMPK has no walk/trigger map our parser understands -> entering it strands the player.
+- Marker frame timing is a guess; beam/port effects are ours (originals: FIELDCOM group 1 beams, not wired).
+- Stage drawing (lights, blinking screens, missing pieces) belongs to gfx-round2; see FORMATS.md "Scene objects".
 
-**Next step:** commit the field work; then screenshots (download, each door both ways, port, Genji, battle) into
-C:\DW3_Project\reference\pc\round2\ with `--flow newgame --select-set 1 --flow-pos X Y --confirm-at F`.
+**Next step:** remaining round-2 screenshots (port on the S225 pads, each lobby door both ways, the Genji battle),
+in src/game/field.cpp nothing is pending; then the final report to the coordinator.
 
 ### Graphics/controls work — on `gfx-round2`
 1. **Fit any screen:** resizable window, borderless fullscreen, and Fit / Stretch / Integer scale modes; wide screens show more of the scene. Saved in options.cfg.

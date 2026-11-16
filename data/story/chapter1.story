@@ -19,6 +19,11 @@
 #                                  objective shown). The team comes from data/starter_sets.cfg (not downloaded yet).
 # gate STAGE TARGET "message" if CONDS     exit STAGE -> TARGET is closed while CONDS hold
 # actor ID STAGE talk|fight|boss SPRITE X Y DIR "Name" [level N] [line REF] [enemy SPRITE "Name"] [if CONDS]
+# actor ID STAGE talk|fight|boss slot N "Name" ...   = the ORIGINAL NPC of actor slot N (sprite, position and facing
+#                                                      from data/npcs/STAGE.npc); while the actor is present it
+#                                                      replaces that original NPC
+# actor ID STAGE talk slot N at X Y DIR "Name" ...   = same, but at the spot an event scene puts it (positions of
+#                                                      scripted scenes are not decoded: measured on reference shots)
 #                                  a story NPC, present while CONDS hold. fight/boss = touch to fight;
 #                                  enemy = the Digimon that battles for this NPC (default: the NPC itself).
 # event NAME on TRIGGER [if CONDS] [repeat]   ...commands...   end
@@ -41,16 +46,19 @@
 # Opening chapter (DW3), following the original order (event bank USDMG200 blocks 0-12, reference shots 33-50):
 # Junpei (= the account name) logs into Digimon Online and arrives in the Asuka City Main Lobby (S210) WITHOUT
 # Digimon. The Tamer Service clerk at the counter downloads the starter pack: the 3 Digimon beam in on the online
-# mark on the floor, Teddy and Kail log in, everyone says hello. The lobby's lower-right exit (Central Sector,
-# S200) stays closed until then. In the Central Sector Tamer Genji challenges him: the tutorial battle against
+# mark on the floor, Teddy and Kail log in, everyone says hello. The lobby's exits (lower-right walkway -> S220 ->
+# Central Sector S200, west corridor -> S200) stay closed until then. In the Central Sector Tamer Genji challenges him: the tutorial battle against
 # his Kuwagamon. After that fight the story STOPS for now (owner review point): free play in Asuka City.
 
 player "Junpei"
-start S210 735 398               # Main Lobby, in front of the Login Room door (reference shot 38)
+start S210 730 382               # Main Lobby, in front of the Login Room door = the S225 -> S210 arrival (shot 38)
 chapter 1 "Chapter 1 - Asuka City"
 talkbank 00 S200 S201 S202 S203 S210 S218 S219 S225 S230
 gflag 6002 1                     # original story phase: lobby before the partner download (WSTAG210 show [6002=1])
-                                 # 6004 = after the download (set by the event; S210 + S200 NPC variants [6004=1])
+                                 # 6003 = Tamer Genji's tutorial in the Central Sector (S200 [6003=1]),
+                                 # 6004 = after the tutorial (Genji at the Arena Front Desk S230, Teddy and Kail at
+                                 # the lobby's floor mark, more NPCs). Phase flags are exclusive: the game creates
+                                 # EVERY actor whose show list holds, so the old phase is cleared when a new one is set.
 
 # Single-partner test runs (--new-game without a starter pack) beam in these three.
 starter P006AGUM "Agumon"
@@ -65,13 +73,18 @@ newgame done login
 newgame objective "Get your partner Digimon at the Tamer Service counter"
 
 gate S210 S200 dmg200:8:1 if !partner_chosen     # "Oh yeah! I need my partner Digimon data!" (shot 39)
+gate S210 S220 dmg200:8:1 if !partner_chosen     # (west corridor -> S200, lower-right walkway -> S220)
 
 # ---- story NPCs ---------------------------------------------------------------------------------
-actor service S210 talk P044OPFS 384 255 1 "Tamer Service" line dmg200:6:1
-actor teddy   S210 talk P013TAKU 330 326 5 "Teddy" line dmg200:$:21 if partner_chosen !friends_split
-actor kail    S210 talk P011MINO 344 314 5 "Kail" line dmg200:$:20 if partner_chosen !friends_split
-actor genji   S200 talk P074JIJI 1040 280 5 "Tamer Genji" level 1 enemy M051KUWA "Kuwagamon" if !genji_won
-actor genji2  S200 talk P074JIJI 1040 280 5 "Tamer Genji" line dmg200:12:4 if genji_won
+# All of them are original NPCs (data/npcs): S210 slot 4 = Tamer Service clerk behind the counter (char 32, 384,255),
+# slots 24/25 = Teddy and Kail (chars 178/179), S200 slot 7 = Tamer Genji (char 57, 1088,288). After the tutorial
+# (6004) Genji waits at the Arena Front Desk (S230 slot 7, original lines) and Teddy/Kail at the floor mark.
+actor service S210 talk slot 4 "Tamer Service" line dmg200:6:1
+# during the download scene Teddy and Kail log in right of the floor mark (reference shot 47)
+actor teddy   S210 talk slot 24 at 388 304 5 "Teddy" line dmg200:$:21 if partner_chosen !friends_split
+actor kail    S210 talk slot 25 at 406 314 5 "Kail" line dmg200:$:20 if partner_chosen !friends_split
+# the tutorial scene: Genji comes up to the player at the dragon gate (reference shot 49)
+actor genji   S200 talk slot 7 at 1030 258 5 "Tamer Genji" level 1 enemy M051KUWA "Kuwagamon" if !genji_won
 
 # ---- 1. login (only for --new-game test runs; the PC flow's sign-up replaces it) ------------------
 event login on start
@@ -99,7 +112,6 @@ event download on talk service if !partner_chosen repeat
   say dmg200:$:2
   beam
   set partner_chosen
-  gset 6004 1
   # Teddy and Kail log in (actors with `if partner_chosen`)
   say dmg200:$:3
   say dmg200:$:4
@@ -121,7 +133,7 @@ event download on talk service if !partner_chosen repeat
   say dmg200:$:20
   say dmg200:$:21
   set friends_split
-  objective "Go to the Central Sector - the lower-right exit of the lobby"
+  objective "Go to the Central Sector - the west corridor of the lobby"
   save
 end
 
@@ -131,6 +143,8 @@ end
 
 # ---- 3. tutorial battle: Tamer Genji and his Kuwagamon (reference shots 48-50) ---------------
 event genji_meet on stage S200 if partner_chosen !genji_won repeat
+  gset 6002 0                    # phase 6003: Genji's tutorial in the Central Sector
+  gset 6003 1
   if !genji_met
     say dmg200:11:1
     say dmg200:11:2
@@ -158,6 +172,9 @@ event genji_after on start if never repeat
     say dmg200:12:7
     say dmg200:12:8
     set genji_won
+    gset 6002 0                  # story phase -> 6004 (exclusive flags): the lobby and city after the tutorial
+    gset 6003 0
+    gset 6004 1
     # STOP: the story pauses here (owner review point). Free play from now on.
     chapter 1 "Chapter 1 - to be continued"
     objective "Free play - the story continues in a later version"

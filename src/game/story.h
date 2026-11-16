@@ -32,6 +32,7 @@ struct StoryActor {
     NpcDef def;              // def.text = line ref or our own text (talk actors without a talk event)
     std::string enemySprite, enemyName;  // fight actors: the Digimon that battles (default = the actor)
     std::vector<StoryCond> when;
+    int slot = -1;           // >= 0: the original NPC of this actor slot (sprite / position from data/npcs)
 };
 
 struct StoryCmd {
@@ -86,6 +87,7 @@ public:
     int startY() const { return startY_; }
     std::vector<const StoryActor*> actorsOn(const std::string& stage) const;
     bool hasActorAt(const std::string& stage, int x, int y) const;  // any story actor (any condition) on that spot
+    bool hasActorSlot(const std::string& stage, int slot) const;  // a present story actor replaces that original NPC
     int revision() const { return revision_; }
     int talkBank(const std::string& stage) const;  // -1 = none
     bool exitBlocked(const std::string& stage, const std::string& target, std::string& msg) const;

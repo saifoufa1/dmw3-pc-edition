@@ -1,13 +1,8 @@
 # DMW3 PC Edition stage data v1 (edit in-game with F2 + --dev, or by hand)
-# exit  x y w h TARGET [arriveX arriveY]
 # walls original = walls from the game's own walk map (DAT/FIELD/STAGE/S###TMPK.BIN)
-# npcs original  = also place the original event actors (PRO/WSTAG###.PRO) as NPCs
+# NPCs and doors of this stage are NOT here: they come from the original tables extracted from the disc,
+# data/npcs/S230.npc and data/doors/S230.door (dw3check --extract-npcs data). Story NPCs: data/story/chapter1.story.
 #
-# ASUKA CITY / ARENA FRONT DESK (S230; S231 = same room in red). Reference shots 52-53: blue walkway from the lobby
-# door, front desk with two clerks below. The only exit is the walkway at the left (decoded trigger zone 0x20 at
-# 72,304) -> Main Lobby S210, arriving in front of the door right of the Tamer Service counter (zone 0xA3).
-# spawn: arriving from the lobby, on the walkway next to that exit (shot 53).
+# ASUKA CITY / ARENA FRONT DESK (S230; S231 = same room in red). Reference shots 52-53.
 spawn 125 305
-exit 72 304 38 23 S210 515 300
-npcs original
 walls original

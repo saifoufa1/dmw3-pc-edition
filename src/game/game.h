@@ -30,6 +30,7 @@ struct DebugOptions {
     // PC flow tests (do not switch to the old direct-start modes)
     std::string flowEvent;      // --flow-event NAME: run this story event once the game has started
     int flowX = -1, flowY = -1; // --flow-pos X Y: place the player once the game has started
+    std::string doorTest;       // --door-test OUT.txt: walk every Asuka City door both ways, write the report, quit
 };
 
 // How the PC flow (title menu) starts a play session.
@@ -53,6 +54,7 @@ public:
     bool save();                   // writes the save (false if no story / failed)
     bool inField() const { return mode_ == Mode::Field; }
     bool storyBusy() const { return story_.busy(); }
+    int doorTestFailures() const { return doorTestFails_; }  // --door-test result (-1 = not run)
     void update(const Input& in);
     void render(int windowW, int windowH);
 
@@ -71,6 +73,7 @@ private:
     BattleRequest pending_;
     std::string error_;
     DebugOptions dbg_;
+    int doorTestFails_ = -1;
 };
 
 }  // namespace dw3

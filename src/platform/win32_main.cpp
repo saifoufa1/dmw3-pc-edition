@@ -218,6 +218,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--lobby" && i + 1 < a.size()) flow.lobbyStage = a[++i];
         else if (a[i] == "--slot" && i + 1 < a.size()) flow.slot = std::stoi(a[++i]);
         else if (a[i] == "--flow-event" && i + 1 < a.size()) dbg.flowEvent = a[++i];
+        else if (a[i] == "--door-test" && i + 1 < a.size()) { dbg.doorTest = a[++i]; dbg.newGame = true; }
         else if (a[i] == "--flow-pos" && i + 2 < a.size()) { dbg.flowX = std::stoi(a[i + 1]); dbg.flowY = std::stoi(a[i + 2]); i += 2; }
         else if (a[i] == "--save-dir" && i + 1 < a.size()) Story::setSaveDir(fs::path(a[++i]));
     }
@@ -293,6 +294,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                 MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - load error", MB_ICONERROR);
                 g_running = false;
                 exitCode = 1;
+            } else if (game.doorTestFailures() >= 0) {  // --door-test: report written, quit
+                exitCode = game.doorTestFailures() ? 1 : 0;
+                g_running = false;
             }
         } else if (!app.init(root, findStageDir(exeDir), dbg, flow, err)) {
             MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - load error", MB_ICONERROR);

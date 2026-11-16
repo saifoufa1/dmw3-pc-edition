@@ -191,8 +191,28 @@ name an original slot: `actor ID STAGE talk slot N "Name" ...` in data/story/*.s
 the stage's trigger zones; `.stage` exits are used only by stages without a .door table (e.g. our forest S400).
 The format is line based so a database import later is a plain parse.
 
+## Field common effects `DAT/FIELD/FIELDCOM.BIN` — verified (loads as a combined UI pack, `loadUiPack`)
+Same layout as the combined title packs: 2 cell groups + 2 texture groups (`dw3check --dump-pack FIELD/FIELDCOM
+out.bmp` prints every piece with its origin). Origins are relative to the actor's **feet**.
+- Group 0 pieces **35-38** (16x16, origin +4,-36): the red/white/blue spark right of the head = the **door marker**
+  shown when the player can use a door (reference shots 38, 49). The engine cycles them (`Field::loadDoorMark`);
+  the frame timing (6 ticks) is our guess — the script that plays them is not found yet (FIELDSTG, open).
+- Group 0 pieces 39-49 (same origin): flashes / rings / stars, probably the "!" / event markers — open.
+- Group 0 pieces 0-19: small icons over the head (24x24/16x16); 20-34: speech/thought bubble growth frames
+  (8x10 -> 20x22) — open. Palm trees, rings, sparkles, glows and the three big blue/green/red rings (bottom of
+  the sheet) are other field effects (ports? save points?) — open.
+- Group 1 pieces 13-31 (32x44 .. 32x76, origin -16,-50..-94): beam columns (download / teleport beam?) — open.
+
+**Scene objects (for stage drawing):** what the NPC/door work confirmed about the WSTAG scene-object list
+(desc +0x10, 18-byte records): flags `0x400` + depthY = foreground pieces sorted with actors (S210 counter
+fronts = objects 89-102, frames 10-23); `link >= 0x64` with flags `0x640` = the door panel a warp opens (link of
+the area link record); mode 1 = frame cycle loopFrom..loopTo with delay `c`. Lights / blinking screens are
+scene objects with additive pieces (`flag != -1`) or mode-1 cycles. Not found: a separate light table — the
+409 objects without a TMPK piece (event-controlled) are the best lead for the missing pieces.
+
 **Still not decoded:** which code plays the `USDMG###` event blocks (event zones kind 8, callbacks +0x20/+0x24),
-link kind 7, talk bank selection, the original door arrow / beam / port effects (ours are drawn by the engine).
+link kind 7, talk bank selection, the original beam / port effects (ours are drawn by the engine), the marker
+timing.
 
 
 ## Battle model (`DAT/MODEL/M###XXXX.BIN`)

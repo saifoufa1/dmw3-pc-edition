@@ -1,31 +1,9 @@
-# DMW3 PC Edition stage data v1 (edit in-game with F2, or by hand)
-# exit  x y w h TARGET [arriveX arriveY]
-# npc   talk  SPRITE x y dir "Name" "Line one|Line two"
-# npc   fight|boss SPRITE x y dir "Name" level
-# item  sword x y
+# DMW3 PC Edition stage data v1 (edit in-game with F2 + --dev, or by hand)
 # walls original = walls from the game's own walk map (DAT/FIELD/STAGE/S###TMPK.BIN)
+# NPCs and doors of this stage are NOT here: they come from the original tables extracted from the disc,
+# data/npcs/S200.npc and data/doors/S200.door (dw3check --extract-npcs data). Story NPCs: data/story/chapter1.story.
 #
-# ASUKA CITY - main streets (S200). Same city continues in S202 (south park) and S218 (bridge + east patio).
-# spawn: decoded player start of WSTAG200 (descriptor +0x2C/+0x30).
-# npc positions/sprites: decoded event actors of WSTAG200 (most common story variant per slot);
-#   when an NPC stands on an original event actor's spot, talking to it shows the ORIGINAL line from your
-#   disc (WSTAG talk table + USTALK00); the name/line here are only a fallback.
-# story NPCs (Tamer Service, Teddy, Kail, Tamer Genji at 1088,288, Black Agumon at the west bridge)
-#   live in data/story/chapter1.story.
-# exits: west bridge = decoded trigger zone 0x20 (destination hand-picked: forest S400 for the demo);
-#   links to S202/S218 = hand-placed at the stairs nearest to their decoded trigger zones.
-#   lobby door = decoded trigger zone 0xA5 (976,200 85x46, right above the city spawn) -> Main Lobby S210 (arriving at its lower-right walkway, zone 0xE1). S200 = "Asuka City / Central Sector" (reference shots 48-49: Tamer Genji at this gate).
+# ASUKA CITY / CENTRAL SECTOR (S200, reference shots 48-49). spawn = decoded WSTAG200 start (1000,236, at the
+# dragon gate, zone 0xA5 = the way to the Main Lobby).
 spawn 1000 236
-exit 56 792 57 32 S400 205 862
-exit 990 200 60 30 S210 625 530
-exit 440 692 16 8 S202 236 282
-exit 574 625 16 8 S202 388 230
-exit 686 569 16 8 S202 500 172
-exit 713 220 16 8 S218 349 176
-exit 1128 294 16 8 S218 870 318
-npc talk P047LEOM 555 474 7 "Leomon" "Train hard with your partner.|The forest lies past the west bridge."
-npc talk P046AW00 564 558 5 "Angewomon" "This plaza is the heart of Asuka City."
-npc talk P115KNIG 595 542 1 "Knightmon" "I keep the peace in this town.|No fighting inside the city walls!"
-npc talk P178NBEA 305 616 1 "Bearmon" "The park with the big tree is down the stairs."
-npc talk P109MTHI 719 235 7 "MetalTyrannomon" "The bridge behind me is off limits today."
 walls original
