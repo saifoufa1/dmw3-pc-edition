@@ -227,7 +227,10 @@ private:
     int phaseTimer_ = 0, shake_ = 0, screenFlash_ = 0;
     long long ticks_ = 0;
     bool done_ = false, won_ = false;
-    float baseMaxHp_ = 120;
+    float baseMaxHp_ = 120, baseMaxMp_ = 60;
+    float atkMul_ = 1, defMul_ = 1;  // the fighting Digimon's own ATK / DEF (TeamMember stats)
+    int maxEvo_ = kMaxEvo;            // highest form its level allows (data/digivolve_paths.cfg)
+    int foeStage_ = 0;                // enemy size class (EnemyModelDef::stage)
     std::string banner_;
     // Enemy projectile look (its own technique effect when it has a model).
     const char* foeEffect_ = nullptr;

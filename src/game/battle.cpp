@@ -1,4 +1,6 @@
 #include "game/battle.h"
+
+#include "game/digimon_db.h"
 #include "ui/ui_draw.h"
 
 #include <fstream>
@@ -68,6 +70,7 @@ struct EnemyModelDef {
     const char* evoName = nullptr;
     const char* evoEffect = nullptr;
     float evoEffectScale = 0;
+    int stage = 0;  // its size class: 0 = Rookie, 1 = Champion (sizes from data/battle_sizes.cfg)
 };
 const EnemyModelDef kEnemyModels[] = {
     {"P171BAGM", "M003AGUM:black", "EFFECT/MEFT0328", 0.0055f,  // Black Agumon -> BlackGreymon
@@ -75,6 +78,9 @@ const EnemyModelDef kEnemyModels[] = {
     {"P167SAGM", "M003AGUM:blue", "EFFECT/MEFT0328", 0.0055f,   // Blue Agumon -> Greymon (blue)
      "M005GREY:blue", "Greymon (Blue)", "EFFECT/MEFT0331", 0.014f},
     {"P006AGUM", "M003AGUM", "EFFECT/MEFT0328", 0.0055f},        // Agumon
+    // Kuwagamon (Tamer Genji's Digimon, the tutorial battle, reference shot 50). It has no field sprite in
+    // FIELD/SPRT, so story actors name its model directly as the enemy "sprite".
+    {"M051KUWA", "M051KUWA", nullptr, 0.f, nullptr, nullptr, nullptr, 0.f, 1},
 };
 
 // Any other partner (sprite only): the original prototype moves.
@@ -197,13 +203,28 @@ bool Battle::start(const BattleRequest& req, const std::string& stageId, std::st
 
     me_.a.sprite = sprites_.get(party_.partnerId, &err);
     foe_.a.sprite = sprites_.get(req.enemySprite, &err);
-    if (!me_.a.sprite || !foe_.a.sprite) return false;
+    bool foeModelOnly = false;  // an enemy with a battle model but no field sprite (Kuwagamon)
+    for (const EnemyModelDef& d : kEnemyModels)
+        if (req.enemySprite == d.sprite && req.enemySprite == d.model) foeModelOnly = models_.get(d.model) != nullptr;
+    if (!me_.a.sprite || (!foe_.a.sprite && !foeModelOnly)) return false;
+    err.clear();
 
     me_.name = party_.partnerName;
     me_.level = std::max(1, party_.level);
     baseMaxHp_ = 120.f + 10.f * float(me_.level - 1);
+    baseMaxMp_ = 60.f;
+    atkMul_ = defMul_ = 1.f;
+    maxEvo_ = kMaxEvo;
+    if (const TeamMember* m = party_.lead()) {  // the fighting team member: its own level, stats and path
+        me_.level = std::max(1, m->level);
+        baseMaxHp_ = float(std::max(1, m->stats.hp));
+        baseMaxMp_ = float(std::max(0, m->stats.mp));
+        atkMul_ = float(std::max(1, m->stats.atk)) / 10.f;
+        defMul_ = 8.f / float(std::max(2, m->stats.def));
+        maxEvo_ = std::clamp(digimonDb().maxForm(*m), 0, kMaxEvo);
+    }
     me_.maxHp = me_.hp = baseMaxHp_;
-    me_.maxMp = me_.mp = 60;
+    me_.maxMp = me_.mp = baseMaxMp_;
     me_.a.dir = E;
     setEvo(0);
 
@@ -219,12 +240,14 @@ bool Battle::start(const BattleRequest& req, const std::string& stageId, std::st
     foeEffectScale_ = 0;
     foeEvoModel_ = foeEvoName_ = foeEvoEffect_ = foeBaseModel_ = nullptr;
     foeEvolved_ = false;
+    foeStage_ = 0;
     for (const EnemyModelDef& d : kEnemyModels) {
         if (req.enemySprite != d.sprite) continue;
         foe_.model = models_.get(d.model);
         if (!foe_.model) break;  // no model on disk: field sprite
         // An enemy Rookie is exactly as tall as the partner Rookie; bosses are a bit bigger.
-        foe_.height = foeHeight(0);
+        foeStage_ = d.stage;
+        foe_.height = foeHeight(d.stage);
         foeBaseModel_ = d.model;
         foeFxBase_ = d.effectScale;
         foeEvoFxBase_ = d.evoEffectScale;
@@ -273,6 +296,11 @@ const FormDef* Battle::form() const {
 
 std::string Battle::formNameOf(int evo) const {
     if (party_.partnerId == "P006AGUM") return kAgumonLine[evo].name;
+    if (const DigimonDef* d = digimonDb().find(party_.partnerId))  // data/digivolve_paths.cfg
+        if (evo < int(d->path.size())) {
+            const std::string& n = d->path[size_t(evo)].name;
+            if (n != "Champion" && n != "Ultimate" && n != "Mega") return n;
+        }
     return evo == 0 ? me_.name : me_.name + " (" + evoStage(evo).name + ")";
 }
 std::string Battle::formName() const { return formNameOf(me_.evo); }
@@ -283,11 +311,11 @@ void Battle::setEvo(int evo) {
     const EvoStage& next = evoStage(evo);
     me_.evo = evo;
     me_.scale = next.scale;
-    me_.power = next.power;
+    me_.power = next.power * atkMul_;
     me_.maxHp = baseMaxHp_ + next.hpBonus;
     if (next.hpBonus > prev.hpBonus) me_.hp += next.hpBonus - prev.hpBonus;  // growing heals the difference
     me_.hp = std::min(me_.hp, me_.maxHp);
-    me_.maxMp = 60.f + 20.f * evo;
+    me_.maxMp = baseMaxMp_ + 20.f * evo;
 
     // The real model of this form (falls back to the tinted sprite when missing).
     const FormDef* f = form();
@@ -439,6 +467,7 @@ void Battle::hit(Fighter& t, Fighter& attacker, float dmg, float fromX, float fr
         dmg *= 0.25f;
         burst(t.x, t.cy(), t.z, rgba(120, 200, 255), 6, 1.5f);
     }
+    if (&t == &me_) dmg *= defMul_;  // the partner's own defense
     dmg = std::max(1.f, std::round(dmg));
     t.hp = std::max(0.f, t.hp - dmg);
     t.flash = 8;
@@ -639,7 +668,7 @@ void Battle::updatePlayer(const Input& in) {
 
     // A digivolved form stays for the whole battle. Going back to Rookie is the player's
     // choice: hold the digivolve button for a second (when it cannot digivolve further).
-    const bool canDigivolve = f.dv >= 100.f && f.evo < kMaxEvo;
+    const bool canDigivolve = f.dv >= 100.f && f.evo < maxEvo_;
     if (!in.digivolve) revertHold_ = 0;
     else if (revertHold_ >= 0 && f.evo > 0 && !canDigivolve && f.act < 0 && ++revertHold_ >= kRevertHold) {
         startEvoSeq(0);
@@ -647,7 +676,7 @@ void Battle::updatePlayer(const Input& in) {
     }
 
     // digivolve (each stage is a different, bigger model)
-    if (in.digivolveP && f.dv >= 100.f && f.evo < kMaxEvo && f.act < 0) {
+    if (in.digivolveP && f.dv >= 100.f && f.evo < maxEvo_ && f.act < 0) {
         startEvoSeq(f.evo + 1);
         return;
     }
@@ -1241,7 +1270,7 @@ void Battle::updateHud() {
     p.mp = int(me_.mp);
     p.maxMp = int(me_.maxMp);
     p.dv = me_.evo >= kMaxEvo ? 1.f : me_.dv / 100.f;
-    p.dvReady = me_.dv >= 100.f && me_.evo < kMaxEvo;
+    p.dvReady = me_.dv >= 100.f && me_.evo < maxEvo_;  // the Digimon's level allows the next form
     e.name = foe_.name;
     e.level = foe_.level;
     e.hp = int(std::ceil(std::max(0.f, foe_.hp)));
@@ -1271,16 +1300,31 @@ void Battle::updateHud() {
 void Battle::startResult() {
     const int exp = int((10 + foe_.level * 8) * (foe_.boss ? 3 : 1) * (foeEvolved_ ? 1.5f : 1.f));
     const int bits = 5 + foe_.level * 6 * (foe_.boss ? 3 : 1);
-    const int oldLv = std::max(1, party_.level);
-    party_.exp += exp;
     party_.bits += bits;
+    const int portrait = party_.partnerId == "P006AGUM" ? 0 : -1;  // STFRPT frame 0x00 = Agumon (others not mapped yet)
+    std::vector<ui::StatDelta> stats;
+    if (TeamMember* m = party_.lead()) {
+        // EXP rule (HANDOFF.md): the Digimon that fought gets the full EXP, the other team members half
+        // (rounded down) for watching from the bench. Each one levels up on its own.
+        const DigiStats before = m->stats;
+        const int oldLv = m->level;
+        digimonDb().addExp(*m, exp);
+        for (auto& o : party_.team)
+            if (&o != m) digimonDb().addExp(o, exp / 2);
+        if (m->level > oldLv) {
+            const DigiStats& a = m->stats;
+            stats = {{"HP", a.hp - before.hp}, {"MP", a.mp - before.mp}, {"ATK", a.atk - before.atk}, {"DEF", a.def - before.def}};
+        }
+        result_.start(exp, bits, oldLv, m->level, stats, m->name, portrait);
+        return;
+    }
+    const int oldLv = std::max(1, party_.level);  // single partner (tests, old saves)
+    party_.exp += exp;
     while (party_.exp >= Party::expToNext(party_.level)) {
         party_.exp -= Party::expToNext(party_.level);
         ++party_.level;
     }
-    std::vector<ui::StatDelta> stats;
     if (party_.level > oldLv) stats = {{"HP", 10 * (party_.level - oldLv)}};
-    const int portrait = party_.partnerId == "P006AGUM" ? 0 : -1;  // STFRPT frame 0x00 = Agumon (others not mapped yet)
     result_.start(exp, bits, oldLv, party_.level, stats, party_.partnerName, portrait);
 }
 
@@ -1331,7 +1375,7 @@ bool Battle::saveSizes() const {
 void Battle::applySizes() {
     me_.height = formHeight(me_.evo);
     if (foe_.model) {
-        foe_.height = foeHeight(foeEvolved_ ? 1 : 0);
+        foe_.height = foeHeight(foeEvolved_ ? 1 : foeStage_);
         foe_.scale = foe_.height / (35.f * kPxW);
         foeEffectScale_ = (foeEvolved_ ? foeEvoFxBase_ : foeFxBase_) * foe_.height / kFxTunedH[foeEvolved_ ? 1 : 0];
     }

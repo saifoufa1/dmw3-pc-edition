@@ -27,6 +27,9 @@ struct DebugOptions {
     std::vector<std::string> storyFlags;  // --story-flags a,b,c: set before play (skips the intro)
     std::string storyEvent;     // --story-event NAME: run this event at once
     int posX = -1, posY = -1;   // --pos X Y: place the player
+    // PC flow tests (do not switch to the old direct-start modes)
+    std::string flowEvent;      // --flow-event NAME: run this story event once the game has started
+    int flowX = -1, flowY = -1; // --flow-pos X Y: place the player once the game has started
 };
 
 // How the PC flow (title menu) starts a play session.
@@ -64,6 +67,7 @@ private:
     Story story_;
     Mode mode_ = Mode::Field;
     int trans_ = 0;
+    int playFrames_ = 0;
     BattleRequest pending_;
     std::string error_;
     DebugOptions dbg_;

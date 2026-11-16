@@ -3,16 +3,25 @@
 #include <algorithm>
 #include <cmath>
 
+#include "game/digimon_db.h"
+
 namespace dw3 {
 
 namespace {
 constexpr int kTransTicks = 36;
+
+// data/digivolve_paths.cfg: per-species stats, growth and digivolve path (shown in the HUD when broken).
+void loadDigimonData(const std::filesystem::path& stageDir, std::string& error) {
+    std::string e;
+    if (!digimonDb().load(stageDir.parent_path() / "digivolve_paths.cfg", e)) error = e;
+}
 }
 
 bool Game::init(const std::filesystem::path& dataRoot, const std::filesystem::path& stageDir,
                 const std::string& startStage, const DebugOptions& dbg, std::string& err) {
     models_.setRoot(dataRoot);
     dbg_ = dbg;
+    loadDigimonData(stageDir, error_);
     // Story: our chapter script (data/story) + the original text from the player's disc data.
     text_.setRoot(dataRoot);
     std::string stage = startStage;
@@ -59,6 +68,7 @@ bool Game::initFlow(const std::filesystem::path& dataRoot, const std::filesystem
                     const DebugOptions& dbg, std::string& err) {
     models_.setRoot(dataRoot);
     dbg_ = dbg;
+    loadDigimonData(stageDir, error_);
     text_.setRoot(dataRoot);
     std::string stage = fs.stage.empty() ? "S210" : fs.stage;
     int sx = fs.x, sy = fs.y;
@@ -71,8 +81,10 @@ bool Game::initFlow(const std::filesystem::path& dataRoot, const std::filesystem
     if (fs.newGame) {
         story_.newGameSkipOpening();
         story_.setAccount(fs.account);
-        party_.team = fs.team;
+        party_.team.clear();
+        for (const auto& m : fs.team) party_.team.push_back(digimonDb().make(m.sprite, m.name));  // Lv 1, own stats
         party_.pack = fs.pack;
+        party_.partnersOut = false;  // downloaded at the Tamer Service counter (story event "download")
         if (!party_.setActive(0)) { err = "starter pack has no Digimon"; return false; }
     } else {
         if (!story_.loadGame(Story::defaultSavePath(), stage, sx, sy)) {
@@ -85,7 +97,9 @@ bool Game::initFlow(const std::filesystem::path& dataRoot, const std::filesystem
     field_.setDevTools(dbg.devTools);
     if (!field_.init(dataRoot, stageDir, stage, err)) return false;
     if (sx >= 0) field_.warpTo(stage, sx, sy);
+    if (dbg.flowX >= 0) field_.warpTo(field_.stageId(), dbg.flowX, dbg.flowY);
     field_.reloadPartner();
+    if (!dbg.flowEvent.empty()) story_.runEvent(dbg.flowEvent);
     battle_.setSizeFile(stageDir.parent_path() / "battle_sizes.cfg");
     if (dbg.devTools) battle_.enableDevTools();
     if (fs.newGame) save();  // the account now has a save: Continue appears in the title menu
@@ -99,6 +113,7 @@ bool Game::save() {
 }
 
 void Game::update(const Input& in) {
+    if (++playFrames_ >= 60) { playFrames_ = 0; ++party_.playSeconds; }  // 60 Hz ticks -> play time
     switch (mode_) {
         case Mode::Field:
             if (in.keyP[0x74] && story_.loaded() && !story_.busy()) field_.saveStory();  // F5

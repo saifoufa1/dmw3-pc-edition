@@ -53,6 +53,7 @@ if(WIN32)
     src/ui/pack_art.cpp
     src/game/account.cpp
     src/game/starter_sets.cpp
+    src/game/digimon_db.cpp
     src/game/app.cpp
     src/game/game.cpp)
   target_link_libraries(dmw3 PRIVATE dw3formats opengl32 gdi32 user32 shell32)

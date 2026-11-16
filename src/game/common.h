@@ -1,5 +1,6 @@
 // Shared game types: input, sprite sets, actors, party state, digivolution stages.
 #pragma once
+#include <algorithm>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -78,9 +79,16 @@ struct EvoStage {
 const EvoStage& evoStage(int level);  // 0 = Rookie .. 3 = Mega
 constexpr int kMaxEvo = 3;
 
-// One Digimon of the player's team (3 in a starter pack).
+// A Digimon's own stats (they grow per level, see DigimonDb; training can raise them later).
+struct DigiStats {
+    int hp = 120, mp = 60, atk = 10, def = 8, spd = 10;
+};
+
+// One Digimon of the player's team (3 in a starter pack). Each has its OWN level, EXP and stats.
 struct TeamMember {
     std::string sprite, name;
+    int level = 1, exp = 0;  // EXP toward the next level
+    DigiStats stats;
 };
 
 // Persistent player/partner state shared by field and battle. Everything the player owns lives here (plus the
@@ -91,9 +99,14 @@ struct Party {
     std::vector<TeamMember> team;          // starter pack members; empty = single partner (old saves, tests)
     int active = 0;
     std::string pack;                      // starter pack letter ("A", "B", "C"), "" = none
+    bool partnersOut = true;               // false = not downloaded yet (new game, lobby): no partner on the field
     int wins = 0;
-    int level = 1, exp = 0, bits = 0;  // partner level, EXP toward the next level, money
+    long long playSeconds = 0;             // total play time (save slot screen)
+    int level = 1, exp = 0, bits = 0;  // money; level/exp = single-partner mode only (no team: tests, old saves)
     static int expToNext(int level) { return 30 + 20 * level; }
+
+    TeamMember* lead() { return team.empty() ? nullptr : &team[size_t(std::clamp(active, 0, int(team.size()) - 1))]; }
+    const TeamMember* lead() const { return const_cast<Party*>(this)->lead(); }
 
     // Makes team member i the active partner. False if out of range.
     bool setActive(int i) {
