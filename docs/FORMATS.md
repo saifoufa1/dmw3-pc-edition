@@ -366,9 +366,42 @@ Texts: `USFGTRPT.BIN` = `u32` at 0 → list of absolute string offsets (0-termin
 1 "LV", 2 "Level gained!", 3 "Learned Tech:\n{1}", 4 "Can load Tech:\n{1}", 5 "{1}\nLevel {2}!",
 6 "Digivolve learned:\n{1}", 7 "Digivolve Slot full…", 8 "BIT gained:\n{1} BIT", 9 "Item gained:\n{1}". (high)
 
+### Title screen packs (combined): `DAT/SCREEN/TTCOMMPK`, `TLOGOUSA`, `TLOGOJPN`, `DAT/NAMEENT/NE_DATA_` — verified (4/4, 309/309 parts)
+Parser `loadUiPack` (`src/formats/ui_sheet.*`), runtime `src/ui/pack_art.*`, checked by `dw3check` ("uipack" line),
+contact sheets + piece origins with `dw3check --dump-pack TTCOMMPK out.bmp` (or `NAMEENT/NE_DATA_`).
+ONE file holds both halves: `u32 table[n]` (`n = table[0] / 4`, absolute offsets); each entry is either a **cell
+group** (same layout as a CS group) or a **texture group** (a page, or a 0-terminated sub-table whose entries are all
+pages). Tell them apart by trying the texture form first: every non-zero sub-table entry must be an RLEN/TIM page.
+Pairing (high confidence, every part lands inside its pages): a run of N cell groups is followed by a run of texture
+groups; the k-th cell group of the run uses the k-th texture group (leftover cells use the run's last one).
+
+| file | groups | content |
+|---|---|---|
+| `TTCOMMPK` | cells 0-3 + 8, textures 4-7 + 9 | 0/1/2: title background (circuit board) = three 8bpp pieces at x 0/128/256 (two CLUT rows each, `clutY` 256/257); 3: 98 small pieces = electric sparks running along the traces (frame runs 15-23, 24-32, 33-40, 41-49, 50-65, 66-81, 82-97 are animation sequences, position baked in); 4: 48 lightning pieces |
+| `TLOGOUSA` | cells 0, texture 1 (8bpp page + 16-bit page) | frame 0x00 "DIGIMON Digital Monsters" 256x92, 0x01 "DIGIMON WORLD" 248x32, 0x02 "3" 56x56, 0x03 additive glow 300x136 (origin 9,-6), 0x04 80x72 (unknown, not drawn), 0x05 additive glow 224x43, 0x06 copyright 176x34 (origin 43,-12), 0x07 164x18 selection frame, 0x08/0x09/0x0A = empty plate (part 11, 164x16) + "Press Start Button" / "Start" / "Continue" |
+| `NE_DATA_` (Digimon Online registration, overlay data of the sign-up) | cells 0, texture 1 | 0x01 320x58 terminal window with side wires (box x 72..247), 0x07 288x182 starter-pack panel (A/B/C tabs + three pink diamonds), 0x0C-0x0E 272x29 "Choose a Starter Pack" header with steps 1-2-3 (all three light step 1: the step light is drawn by code), 0x11-0x29 animated 32x32 portraits: Guilmon 0x11-13, Agumon 0x14-17, Kotemon 0x18-1B, Monmon 0x1C-1E, Kumamon 0x1F-21, Renamon 0x22-25, Patamon 0x26-29 (no Veemon), 0x38 190x75 "DIGIMON ONLINE" logo (origin -9,-52; texture is grey, the original shows it light blue), 0x36 321x92 red bars, 0x2A-0x35 small buttons |
+
+On-screen positions used by `src/game/screen_style.h` were measured on the original (reference screenshots), not
+decoded from the overlay code. `TLOGOUSA` matches the original title screen (logo at 21,20, plates at 78,151 + 21 per
+entry). **Open:** what piece 0x04 of `TLOGOUSA` is; spark timing; the exact title background brightness (the original
+looks darker than the raw texture, we tint it 60 %).
+
+`DAT/SCREEN/CMNBGDCS` + `CMNBGDTM` (CS/TM pair, 3 pieces 540x532 / 580x477 / 516x452 at origins -16,-258 / -28,-206 /
+-16,-192): the three layers of the **Digimon Online hex background** (diagonal bands of hexagons with the Digimon
+Online emblem). We drift them slowly (parallax); the original motion is not decoded.
+
+### Registration text `DAT/COUNTRY/USA/USNAMEET.BIN` — verified (31 messages)
+`u32 count`, `count × u32` absolute offsets, 0-terminated strings in the USA encoding ("Message text").
+1 welcome speech, 3-5 "1" "2" "3", 6 "Choose a Starter Pack", 7-9 "A" "B" "C", 10-12 "Balanced / Powerful / Maniac
+Pack", 13 Kotemon, 14 Monmon, 15 Kumamon, 16 Agumon, 17 "Veemon" (name only), 18 Guilmon, 19 Renamon, 20 Patamon
+(one 2-line description each), 21 "Confirmation Screen", 22 "Register account?", 23 "YES", 24 "NO",
+26-28 pack summaries, 29 "NOW ENTERING...", 30 "Registered". `USNAMEDT.BIN` (same layout) = name entry: "Enter Name",
+the letter grids, default name, "That name is not allowed.". `data/starter_sets.cfg` refers to these as `@N`.
+
 ### Other sheets (decoded, not used yet)
 `STDGLB` (Digimon Lab: portraits, DV-tree arrows; group 2 = 8bpp), `STSTAT` (status screen), `STALBM`, `STCDSP`,
-`STSHOP`, `STTITL` (title, 8 groups), `STWMP0/1` (world map), `NAMEDT`, `CMNBGD`, `STDGNM`, `STNMET`, `STMCRD`,
+`STSHOP`, `STTITL` (save-file icon titles per country, not the title screen), `STWMP0/1` (world map), `NAMEDT` (name
+entry letter grid + chibi portraits), `STDGNM`, `STNMET` (same art as `NE_DATA_`), `STMCRD`,
 `STTRNG` / `JTRGCAST` (training), `JTWNDCST` (826 parts: Japanese kanji font + window, 5 pages).
 `DAT/MODEL/FGTEFTIM.BIN` is a one-page pack of battle *effect* textures (flames, rays, glows), not HUD.
 

@@ -11,7 +11,10 @@
 //                                                 perspective and print its nodes
 //   dw3check --dump-ui CMFONT out.bmp [parts]     render a UI cell sheet's pieces (or all parts) as a contact sheet
 //                                                 (CMFONT, PGFGT, STFRPT, STDGLB, JTWND, any SCREEN name like STSTAT)
+//   dw3check --dump-pack TTCOMMPK out.bmp [parts]  same for a combined title pack (DAT/SCREEN/TTCOMMPK, TLOGOUSA)
 #include <algorithm>
+#include <array>
+#include <map>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -81,6 +84,18 @@ static int dumpField(const fs::path& root, const std::string& id, const fs::path
                 if (f.triggerAt(x, y)) d = rgba(0, 255, 255);
                 else if (f.walkAt(x, y) && ((x + y) % 4) == 0) d = rgba(0, 255, 0);
             }
+        // Trigger zones: bounding box per trigger value (exit / door candidates for data/stages/*.stage).
+        std::map<int, std::array<int, 4>> zones;
+        for (int y = 0; y < im.h; ++y)
+            for (int x = 0; x < im.w; ++x)
+                if (const int t = f.triggerAt(x, y)) {
+                    auto it = zones.find(t);
+                    if (it == zones.end()) zones[t] = {x, y, x, y};
+                    else it->second = {std::min(it->second[0], x), std::min(it->second[1], y), std::max(it->second[2], x),
+                                       std::max(it->second[3], y)};
+                }
+        for (const auto& [t, z] : zones)
+            std::printf("trigger 0x%02x: x %d y %d w %d h %d\n", t, z[0], z[1], z[2] - z[0] + 1, z[3] - z[1] + 1);
         for (const auto& a : ov.actors)
             for (int k = -4; k <= 4; ++k) {
                 if (im.inside(a.x + k, a.y)) im.px[size_t(a.y) * im.w + a.x + k] = rgba(255, 0, 255);
@@ -369,7 +384,12 @@ static int dumpUi(const fs::path& root, const std::string& name, const fs::path&
                 Image img;
                 int ox, oy;
                 if (allParts) renderUiPart(*t, cg[gi].parts[i], img);
-                else renderUiPiece(*t, cg[gi], int(i), img, ox, oy);
+                else {
+                    renderUiPiece(*t, cg[gi], int(i), img, ox, oy);
+                    std::printf("  piece %zu.%zu (frame 0x%02x, flag %d): origin %d,%d size %dx%d\n", gi, i,
+                                i < cg[gi].frameIds.size() ? cg[gi].frameIds[i] : 0xff, cg[gi].pieces[i].flag, ox, oy,
+                                img.w, img.h);
+                }
                 if (img.w > 0 && img.h > 0) imgs.push_back(std::move(img));
             }
         }
@@ -395,6 +415,75 @@ static int dumpUi(const fs::path& root, const std::string& name, const fs::path&
     }
     std::printf("no UI sheet starting with %s\n", name.c_str());
     return 1;
+}
+
+// Combined title packs (cells + textures in one file), see FORMATS.md "Title screen packs".
+static const char* const kUiPacks[] = {"TTCOMMPK", "TLOGOUSA", "TLOGOJPN", "NAMEENT/NE_DATA_"};
+
+static int checkUiPacks(const fs::path& root, int& packs, int& parts, int& drawn) {
+    int failures = 0;
+    for (const char* name : kUiPacks) {
+        Bytes b;
+        if (!readFile(std::strchr(name, 0x2f) ? root / "DAT" / (std::string(name) + ".BIN") : root / "DAT" / "SCREEN" / (std::string(name) + ".BIN"), b)) continue;
+        UiPack pk;
+        std::string err;
+        if (!loadUiPack(b, pk, &err)) { std::printf("FAIL ui pack %s: %s\n", name, err.c_str()); ++failures; continue; }
+        ++packs;
+        for (size_t gi = 0; gi < pk.cells.size(); ++gi)
+            for (auto& p : pk.cells[gi].parts) {
+                ++parts;
+                Image img;
+                if (renderUiPart(pk.tex[size_t(pk.texFor[gi])], p, img)) ++drawn;
+                else { std::printf("FAIL ui pack %s: group %zu part outside its pages\n", name, gi); ++failures; }
+            }
+    }
+    return failures;
+}
+
+static int dumpPack(const fs::path& root, const std::string& name, const fs::path& out, bool allParts) {
+    Bytes b;
+    UiPack pk;
+    std::string err;
+    if (!readFile(name.find('/') != std::string::npos ? root / "DAT" / (name + ".BIN") : root / "DAT" / "SCREEN" / (name + ".BIN"), b) || !loadUiPack(b, pk, &err)) {
+        std::printf("cannot load pack %s: %s\n", name.c_str(), err.c_str());
+        return 1;
+    }
+    std::vector<Image> imgs;
+    for (size_t gi = 0; gi < pk.cells.size(); ++gi) {
+        const UiTexGroup& t = pk.tex[size_t(pk.texFor[gi])];
+        const size_t n = allParts ? pk.cells[gi].parts.size() : pk.cells[gi].pieces.size();
+        std::printf("group %zu -> tex %d: %zu parts, %zu pieces\n", gi, pk.texFor[gi], pk.cells[gi].parts.size(),
+                    pk.cells[gi].pieces.size());
+        for (size_t i = 0; i < n; ++i) {
+            Image img;
+            int ox, oy;
+            if (allParts) renderUiPart(t, pk.cells[gi].parts[i], img);
+            else {
+                renderUiPiece(t, pk.cells[gi], int(i), img, ox, oy);
+                std::printf("  piece %zu.%zu (frame 0x%02x, flag %d): origin %d,%d size %dx%d\n", gi, i,
+                            i < pk.cells[gi].frameIds.size() ? pk.cells[gi].frameIds[i] : 0xff, pk.cells[gi].pieces[i].flag,
+                            ox, oy, img.w, img.h);
+            }
+            if (img.w > 0 && img.h > 0) imgs.push_back(std::move(img));
+        }
+    }
+    int x = 0, y = 0, rowH = 0, W = 512;
+    std::vector<std::pair<int, int>> pos;
+    for (auto& im : imgs) {
+        W = std::max(W, im.w + 2);
+        if (x + im.w + 2 > W) { x = 0; y += rowH + 2; rowH = 0; }
+        pos.push_back({x, y});
+        x += im.w + 2;
+        rowH = std::max(rowH, im.h);
+    }
+    Image sheet;
+    sheet.resize(W, y + rowH + 2, 0);
+    for (size_t i = 0; i < imgs.size(); ++i)
+        for (int yy = 0; yy < imgs[i].h; ++yy)
+            for (int xx = 0; xx < imgs[i].w; ++xx)
+                sheet.px[size_t(pos[i].second + yy) * W + pos[i].first + xx] = imgs[i].px[size_t(yy) * imgs[i].w + xx];
+    std::printf("%s: %zu images -> %s (scratch only, never commit)\n", name.c_str(), imgs.size(), out.string().c_str());
+    return writeBmp(out, sheet) ? 0 : 1;
 }
 
 static int dumpModel(const fs::path& root, const std::string& id, const fs::path& out, int onlyClip) {
@@ -668,6 +757,8 @@ int main(int argc, char** argv) {
                              i + 4 < argc ? float(std::atof(argv[i + 4])) : 30.f, i + 5 < argc ? float(std::atof(argv[i + 5])) : 1.6f);
         if (!std::strcmp(argv[i], "--dump-ui") && i + 2 < argc)
             return dumpUi(root, argv[i + 1], argv[i + 2], i + 3 < argc && !std::strcmp(argv[i + 3], "parts"));
+        if (!std::strcmp(argv[i], "--dump-pack") && i + 2 < argc)
+            return dumpPack(root, argv[i + 1], argv[i + 2], i + 3 < argc && !std::strcmp(argv[i + 3], "parts"));
         if (!std::strcmp(argv[i], "--dump-text") && i + 1 < argc)
             return dumpText(root, argv[i + 1], i + 2 < argc ? int(std::strtol(argv[i + 2], nullptr, 0)) : -1);
         if (!std::strcmp(argv[i], "--dump-model") && i + 2 < argc)
@@ -733,6 +824,11 @@ int main(int argc, char** argv) {
                 overlays, overlaySkipped, objects, objNoPiece, actors);
     failures += checkText(root);
     failures += checkUi(root);
+    {
+        int packs = 0, packParts = 0, packDrawn = 0;
+        failures += checkUiPacks(root, packs, packParts, packDrawn);
+        std::printf("uipack : %d title packs, %d parts (%d inside their texture pages)\n", packs, packParts, packDrawn);
+    }
     int talkActors = 0, talkEntries = 0;
     for (auto& e : fs::directory_iterator(root / "PRO")) {
         const std::string n = e.path().filename().string();

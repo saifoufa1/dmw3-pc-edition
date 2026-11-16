@@ -98,6 +98,75 @@ uint16_t UiTexGroup::word(int wx, int y) const {
     return 0;
 }
 
+namespace {
+
+bool parseCellGroup(ByteView v, size_t base, UiCellGroup& g, std::string* err) {
+    std::vector<uint32_t> off;
+    if (!readTable(v, base, off) || off.size() < 2) return fail(err, "bad cell group table");
+    for (size_t i = 1; i < off.size(); ++i)
+        if (off[i] < off[i - 1] || !v.has(base + off[i], 1)) return fail(err, "cell group offsets out of order");
+    // parts
+    const size_t pEnd = base + off[1];
+    for (size_t p = base + off[0]; p + 14 <= pEnd; p += 14) {
+        UiPart part;
+        v.u16(p, part.x); v.u16(p + 2, part.y); v.u16(p + 4, part.w); v.u16(p + 6, part.h);
+        v.u16(p + 8, part.clutX); v.u16(p + 10, part.clutY); v.u16(p + 12, part.kind);
+        g.parts.push_back(part);
+    }
+    // frame ids
+    for (size_t p = base + off[1];; ++p) {
+        if (!v.has(p, 1)) return fail(err, "unterminated frame id list");
+        if (v.data[p] == 0xFF) break;
+        g.frameIds.push_back(v.data[p]);
+    }
+    // pieces
+    for (size_t k = 2; k < off.size(); ++k) {
+        const size_t p = base + off[k];
+        uint16_t cnt, zero, flag;
+        if (!v.u16(p, cnt) || !v.u16(p + 2, zero) || !v.u16(p + 4, flag)) return fail(err, "piece header out of range");
+        if (!v.has(p + 6, size_t(cnt) * 6)) return fail(err, "piece layers out of range");
+        UiPiece pc;
+        pc.flag = int16_t(flag);
+        for (uint16_t j = 0; j < cnt; ++j) {
+            UiLayer l;
+            uint16_t dx, dy;
+            v.u16(p + 6 + j * 6, l.part); v.u16(p + 8 + j * 6, dx); v.u16(p + 10 + j * 6, dy);
+            l.dx = int16_t(dx); l.dy = int16_t(dy);
+            if (l.part >= g.parts.size()) return fail(err, "piece references a missing part");
+            pc.layers.push_back(l);
+        }
+        g.pieces.push_back(std::move(pc));
+    }
+    return true;
+}
+
+// Texture group at `base`: a single page or a 0-terminated sub-table of pages. `strict`: every sub-table
+// entry must be a page (used to tell texture groups from cell groups inside a combined pack).
+bool parseTexGroup(ByteView v, size_t base, UiTexGroup& g, bool strict, std::string* err) {
+    if (isPage(v, base)) {
+        UiPage pg;
+        if (!loadPage(v, base, pg)) return fail(err, "bad page");
+        g.pages.push_back(std::move(pg));
+        return true;
+    }
+    std::vector<uint32_t> sub;
+    if (!readTable(v, base, sub)) return fail(err, "bad texture group table");
+    for (uint32_t e : sub) {
+        if (e == 0) break;
+        // Non-page entries exist (PGFGTW00 group 0 carries a raw 16-bit cursor strip): skipped.
+        if (!isPage(v, base + e)) {
+            if (strict) return fail(err, "not a texture group");
+            continue;
+        }
+        UiPage pg;
+        if (!loadPage(v, base + e, pg)) return fail(err, "bad page in group");
+        g.pages.push_back(std::move(pg));
+    }
+    return !strict || !g.pages.empty() || fail(err, "empty texture group");
+}
+
+}  // namespace
+
 bool loadCellSheet(ByteView v, std::vector<UiCellGroup>& out, std::string* err) {
     out.clear();
     std::vector<uint32_t> top;
@@ -106,42 +175,7 @@ bool loadCellSheet(ByteView v, std::vector<UiCellGroup>& out, std::string* err) 
         UiCellGroup g;
         const size_t base = top[gi];
         if (base == 0 && gi > 0) { out.push_back(std::move(g)); continue; }
-        std::vector<uint32_t> off;
-        if (!readTable(v, base, off) || off.size() < 2) return fail(err, "bad cell group table");
-        for (size_t i = 1; i < off.size(); ++i)
-            if (off[i] < off[i - 1] || !v.has(base + off[i], 1)) return fail(err, "cell group offsets out of order");
-        // parts
-        const size_t pEnd = base + off[1];
-        for (size_t p = base + off[0]; p + 14 <= pEnd; p += 14) {
-            UiPart part;
-            v.u16(p, part.x); v.u16(p + 2, part.y); v.u16(p + 4, part.w); v.u16(p + 6, part.h);
-            v.u16(p + 8, part.clutX); v.u16(p + 10, part.clutY); v.u16(p + 12, part.kind);
-            g.parts.push_back(part);
-        }
-        // frame ids
-        for (size_t p = base + off[1];; ++p) {
-            if (!v.has(p, 1)) return fail(err, "unterminated frame id list");
-            if (v.data[p] == 0xFF) break;
-            g.frameIds.push_back(v.data[p]);
-        }
-        // pieces
-        for (size_t k = 2; k < off.size(); ++k) {
-            const size_t p = base + off[k];
-            uint16_t cnt, zero, flag;
-            if (!v.u16(p, cnt) || !v.u16(p + 2, zero) || !v.u16(p + 4, flag)) return fail(err, "piece header out of range");
-            if (!v.has(p + 6, size_t(cnt) * 6)) return fail(err, "piece layers out of range");
-            UiPiece pc;
-            pc.flag = int16_t(flag);
-            for (uint16_t j = 0; j < cnt; ++j) {
-                UiLayer l;
-                uint16_t dx, dy;
-                v.u16(p + 6 + j * 6, l.part); v.u16(p + 8 + j * 6, dx); v.u16(p + 10 + j * 6, dy);
-                l.dx = int16_t(dx); l.dy = int16_t(dy);
-                if (l.part >= g.parts.size()) return fail(err, "piece references a missing part");
-                pc.layers.push_back(l);
-            }
-            g.pieces.push_back(std::move(pc));
-        }
+        if (!parseCellGroup(v, base, g, err)) return false;
         out.push_back(std::move(g));
     }
     return !out.empty() || fail(err, "no cell groups");
@@ -155,25 +189,48 @@ bool loadTexturePack(ByteView v, std::vector<UiTexGroup>& out, std::string* err)
         UiTexGroup g;
         const size_t base = top[gi];
         if (base == 0 && gi > 0) { out.push_back(std::move(g)); continue; }
-        if (isPage(v, base)) {
-            UiPage pg;
-            if (!loadPage(v, base, pg)) return fail(err, "bad page");
-            g.pages.push_back(std::move(pg));
-        } else {
-            std::vector<uint32_t> sub;
-            if (!readTable(v, base, sub)) return fail(err, "bad texture group table");
-            for (uint32_t e : sub) {
-                if (e == 0) break;
-                // Non-page entries exist (PGFGTW00 group 0 carries a raw 16-bit cursor strip): skipped.
-                if (!isPage(v, base + e)) continue;
-                UiPage pg;
-                if (!loadPage(v, base + e, pg)) return fail(err, "bad page in group");
-                g.pages.push_back(std::move(pg));
-            }
-        }
+        if (!parseTexGroup(v, base, g, false, err)) return false;
         out.push_back(std::move(g));
     }
     return !out.empty() || fail(err, "no texture groups");
+}
+
+bool loadUiPack(ByteView v, UiPack& out, std::string* err) {
+    out = {};
+    std::vector<uint32_t> top;
+    if (!readTable(v, 0, top)) return fail(err, "bad pack table");
+    std::vector<size_t> waiting;  // cell groups not yet paired with a texture group
+    size_t paired = 0;            // how many of `waiting` the current texture run already paired
+    bool inTexRun = false;
+    for (size_t gi = 0; gi < top.size(); ++gi) {
+        if (top[gi] == 0) continue;
+        UiTexGroup tg;
+        std::string terr;
+        if (parseTexGroup(v, top[gi], tg, true, &terr)) {
+            if (!inTexRun) paired = 0;
+            inTexRun = true;
+            out.tex.push_back(std::move(tg));
+            const int ti = int(out.tex.size()) - 1;
+            if (paired < waiting.size()) out.texFor[waiting[paired++]] = ti;
+            continue;
+        }
+        if (inTexRun) {  // a new cell run starts: the previous one pairs leftovers with its last texture
+            for (size_t k = paired; k < waiting.size(); ++k) out.texFor[waiting[k]] = int(out.tex.size()) - 1;
+            waiting.clear();
+            inTexRun = false;
+        }
+        UiCellGroup cg;
+        if (!parseCellGroup(v, top[gi], cg, err)) return false;
+        out.cells.push_back(std::move(cg));
+        out.texFor.push_back(-1);
+        waiting.push_back(out.cells.size() - 1);
+    }
+    if (inTexRun)
+        for (size_t k = paired; k < waiting.size(); ++k) out.texFor[waiting[k]] = int(out.tex.size()) - 1;
+    if (out.cells.empty() || out.tex.empty()) return fail(err, "pack has no cells or no textures");
+    for (int t : out.texFor)
+        if (t < 0) return fail(err, "cell group without a texture group");
+    return true;
 }
 
 uint32_t ps1Color(uint16_t c) {

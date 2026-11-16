@@ -66,6 +66,16 @@ bool loadCellSheet(ByteView v, std::vector<UiCellGroup>& out, std::string* err =
 bool loadTexturePack(ByteView v, std::vector<UiTexGroup>& out, std::string* err = nullptr);
 // Texture group used by cell group `cellGroup`: the same index when it holds VRAM pages, else the next group
 // that does (wrapping around). nullptr if none.
+// Combined pack (DAT/SCREEN/TTCOMMPK, TLOGOUSA, TLOGOJPN): ONE file whose top table mixes cell groups and texture
+// groups. A run of N cell groups is followed by a run of texture groups; the k-th cell group of the run uses the
+// k-th texture group (leftover cells use the run's last one). See docs/FORMATS.md "Title screen packs".
+struct UiPack {
+    std::vector<UiCellGroup> cells;
+    std::vector<int> texFor;  // texture group index per cell group
+    std::vector<UiTexGroup> tex;
+};
+bool loadUiPack(ByteView v, UiPack& out, std::string* err = nullptr);
+
 const UiTexGroup* uiTexGroupFor(const std::vector<UiTexGroup>& tex, size_t cellGroup);
 
 // PS1 BGR555 -> RGBA, 0x0000 = transparent.
