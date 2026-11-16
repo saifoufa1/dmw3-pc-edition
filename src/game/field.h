@@ -13,6 +13,7 @@
 #include "formats/stage_pack.h"
 #include "game/common.h"
 #include "game/stage_data.h"
+#include "game/story.h"
 
 namespace dw3 {
 
@@ -35,6 +36,15 @@ public:
     std::optional<BattleRequest> takeBattleRequest();
     void endBattle(bool won);
 
+    // Story glue: the story decides events, story NPCs, gates and objectives (may be null).
+    void attachStory(Story* s) { story_ = s; }
+    const std::string& stageId() const { return stageIds_[stageIndex_]; }
+    int playerX() const { return int(player_.x); }
+    int playerY() const { return int(player_.y); }
+    bool warpTo(const std::string& stage, int x, int y);  // x < 0 = stage spawn
+    void reloadPartner();
+    void saveStory();
+
     // For the battle scene backdrop.
     const Texture& stageTexture() const { return stageTex_; }
     float camX() const { return camX_; }
@@ -45,6 +55,8 @@ private:
         NpcDef def;
         Actor actor;
         bool defeated = false;
+        std::string storyId;  // story actor id ("" = from the stage file)
+        int origSlot = -1;    // matching original WSTAG event actor slot (original talk lines)
     };
     enum class Tool { Walls, Exits, Npcs, Spawn };
     // A scene object from the WSTAG overlay drawn every frame (animated or additive glow).
@@ -71,6 +83,8 @@ private:
     const PieceTex* pieceTex(int piece);
     void clearPieceTex();
     void buildNpcs();
+    void startTalk(size_t npc);
+    void handleStoryRequests();
     void updatePartner(float speed);
     void updateCamera();
     void updateEditor(const Input& in);
@@ -100,7 +114,11 @@ private:
     int battleNpc_ = -1;
     int touchCooldown_ = 0;
 
-    // dialogue
+    Story* story_ = nullptr;
+    int storyRev_ = -1;
+    std::string storyBattle_;  // story actor id of the running fight
+
+    // dialogue (fallback when no story is attached)
     int talkNpc_ = -1;
     std::vector<std::string> talkPages_;
     size_t talkPage_ = 0;

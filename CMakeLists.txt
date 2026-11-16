@@ -21,7 +21,10 @@ add_library(dw3formats STATIC
   src/formats/stage_pack.cpp
   src/formats/field_stage.cpp
   src/formats/stage_overlay.cpp
-  src/formats/model.cpp)
+  src/formats/dw3_text.cpp
+  src/formats/ui_sheet.cpp
+  src/formats/model.cpp
+  src/formats/arena.cpp)
 target_include_directories(dw3formats PUBLIC src)
 
 # --- Asset checker / dumper (console) ---
@@ -34,10 +37,19 @@ if(WIN32)
     src/platform/win32_main.cpp
     src/render/gl_renderer.cpp
     src/render/model_renderer.cpp
+    src/render/camera3d.cpp
     src/game/common.cpp
     src/game/stage_data.cpp
     src/game/field.cpp
     src/game/battle.cpp
+    src/game/story_text.cpp
+    src/game/dialogue.cpp
+    src/game/story.cpp
+    src/ui/ui_assets.cpp
+    src/ui/ui_draw.cpp
+    src/ui/battle_hud.cpp
+    src/ui/result_screen.cpp
+    src/ui/ui_preview.cpp
     src/game/game.cpp)
   target_link_libraries(dmw3 PRIVATE dw3formats opengl32 gdi32 user32 shell32)
   target_compile_definitions(dmw3 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX

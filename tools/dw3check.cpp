@@ -4,6 +4,13 @@
 //   dw3check --dump-sprite P006AGUM out.bmp       render a sprite pack's frames as a sheet
 //   dw3check --dump-model M005GREY out.bmp [clip] render a battle model: one row per clip
 //                                                 (8 sampled frames each), or one clip
+//   dw3check --dump-text DMG200 [block]           print event text (console only, never commit the output)
+//   dw3check --dump-text TALK00 [id]              print NPC talk text
+//   dw3check --dump-text S200                     print a stage's WSTAG actors + talk tables with their lines
+//   dw3check --dump-arena 1001 out.bmp [yaw] [pitch] [dist]  render a 3D battle arena (MEFT1001..1055) in
+//                                                 perspective and print its nodes
+//   dw3check --dump-ui CMFONT out.bmp [parts]     render a UI cell sheet's pieces (or all parts) as a contact sheet
+//                                                 (CMFONT, PGFGT, STFRPT, STDGLB, JTWND, any SCREEN name like STSTAT)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -13,11 +20,14 @@
 #include <string>
 
 #include "core/bytes.h"
+#include "formats/arena.h"
 #include "formats/model.h"
 #include "formats/sprite_pack.h"
 #include "formats/stage_pack.h"
 #include "formats/field_stage.h"
 #include "formats/stage_overlay.h"
+#include "formats/dw3_text.h"
+#include "formats/ui_sheet.h"
 
 namespace fs = std::filesystem;
 using namespace dw3;
@@ -189,6 +199,204 @@ static void rasterModel(const Model& m, const std::vector<Image>& tex, const Pos
     }
 }
 
+// ---- message text (DAT/COUNTRY/USA) ----
+static void printMessage(ByteView v, uint32_t s, uint32_t e, const char* tag) {
+    int unk = 0;
+    Message m = decodeMessage(v, s, e, "Junpei", &unk);
+    std::printf("%s%s%s%s\n", tag, m.speaker.empty() ? "" : "[", m.speaker.c_str(), m.speaker.empty() ? "" : "] ");
+    for (size_t p = 0; p < m.pages.size(); ++p) {
+        std::string pg = m.pages[p];
+        for (size_t i = 0; (i = pg.find('\n', i)) != std::string::npos;) pg.replace(i, 1, " / "), i += 3;
+        std::printf("      p%zu: %s\n", p + 1, pg.c_str());
+    }
+    if (unk || !m.ok) std::printf("      (%d unknown codes%s)\n", unk, m.ok ? "" : ", not terminated");
+}
+
+static int dumpText(const fs::path& root, const std::string& what, int only) {
+    const fs::path dir = root / "DAT" / "COUNTRY" / "USA";
+    Bytes b;
+    std::string err;
+    char tag[64];
+    if (what.rfind("DMG", 0) == 0) {
+        EventBank ev;
+        if (!readFile(dir / ("US" + what + ".BIN"), b) || !loadEventBank(b, ev, &err)) { std::printf("cannot read %s %s\n", what.c_str(), err.c_str()); return 1; }
+        for (size_t k = 0; k < ev.blocks.size(); ++k) {
+            if (only >= 0 && int(k) != only) continue;
+            for (size_t m = 1; m < ev.blocks[k].size(); ++m) {
+                std::snprintf(tag, sizeof tag, "%s:%zu:%zu ", what.c_str(), k, m);
+                printMessage(b, ev.blocks[k][m].first, ev.blocks[k][m].second, tag);
+            }
+        }
+        return 0;
+    }
+    if (what.rfind("TALK", 0) == 0) {
+        TalkBank tb;
+        if (!readFile(dir / ("US" + what + ".BIN"), b) || !loadTalkBank(b, tb, &err)) { std::printf("cannot read %s %s\n", what.c_str(), err.c_str()); return 1; }
+        for (size_t k = 0; k < tb.msgs.size(); ++k) {
+            if ((only >= 0 && int(k) != only) || tb.msgs[k].second - tb.msgs[k].first <= 4) continue;
+            std::snprintf(tag, sizeof tag, "%s:0x%zx ", what.c_str(), k);
+            printMessage(b, tb.msgs[k].first, tb.msgs[k].second, tag);
+        }
+        return 0;
+    }
+    // Stage: WSTAG actors with their show conditions and talk tables (lines from TALK00).
+    Bytes pro, talk;
+    StageOverlay ov;
+    TalkBank tb;
+    if (!readFile(root / "PRO" / ("WSTAG" + what.substr(1) + ".PRO"), pro) || !loadStageOverlay(pro, ov, &err)) { std::printf("cannot read overlay %s %s\n", what.c_str(), err.c_str()); return 1; }
+    const bool haveTalk = readFile(dir / "USTALK00.BIN", talk) && loadTalkBank(talk, tb);
+    auto conds = [](const std::vector<FlagCond>& c) {
+        std::string s = "[";
+        for (auto& f : c) { char t[24]; std::snprintf(t, sizeof t, "%s%04x=%u", s.size() > 1 ? " " : "", f.flag, unsigned(f.value)); s += t; }
+        return s + "]";
+    };
+    for (const auto& a : ov.actors) {
+        std::printf("actor char %u slot %u at %d,%d dir %d  show %s\n", a.charId, a.slot, a.x, a.y, a.dir, conds(a.show).c_str());
+        for (const auto& t : a.talk) {
+            std::printf("    if %s set %s -> talk 0x%x\n", conds(t.cond).c_str(), conds(t.set).c_str(), t.msg);
+            if (haveTalk && t.msg < tb.msgs.size()) printMessage(talk, tb.msgs[t.msg].first, tb.msgs[t.msg].second, "      ");
+        }
+    }
+    return 0;
+}
+
+// Decodes every USA message bank; a message that does not terminate or has unknown codes is a failure.
+static int checkText(const fs::path& root) {
+    const fs::path dir = root / "DAT" / "COUNTRY" / "USA";
+    int failures = 0, banks = 0, msgs = 0;
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) { std::printf("text   : no DAT/COUNTRY/USA (skipped)\n"); return 0; }
+    for (auto& e : fs::directory_iterator(dir)) {
+        const std::string n = e.path().filename().string();
+        const bool dmg = n.rfind("USDMG", 0) == 0 && n != "USDMPACK.BIN", talk = n.rfind("USTALK", 0) == 0;
+        if (!dmg && !talk) continue;
+        Bytes b;
+        std::string err;
+        std::vector<std::pair<uint32_t, uint32_t>> all;
+        bool ok = readFile(e.path(), b);
+        if (ok && dmg) {
+            EventBank ev;
+            ok = loadEventBank(b, ev, &err);
+            for (auto& blk : ev.blocks) all.insert(all.end(), blk.begin(), blk.end());
+        } else if (ok) {
+            TalkBank tb;
+            ok = loadTalkBank(b, tb, &err);
+            all = tb.msgs;
+        }
+        int total = 0;
+        const int bad = ok ? checkMessages(b, all, &total) : 0;
+        if (!ok || bad) { std::printf("FAIL text %s: %s %d bad messages\n", n.c_str(), err.c_str(), bad); ++failures; }
+        ++banks;
+        msgs += total;
+    }
+    std::printf("text   : %d USA message banks, %d messages decoded\n", banks, msgs);
+    return failures;
+}
+
+// ---- UI cell sheets (*CS) + texture packs (*TM). Pairs: same stem, plus the odd names. ----
+static std::vector<std::pair<fs::path, fs::path>> uiPairs(const fs::path& root) {
+    std::vector<std::pair<fs::path, fs::path>> out;
+    std::error_code ec;
+    for (auto& e : fs::recursive_directory_iterator(root / "DAT", ec)) {
+        const std::string n = e.path().filename().string();
+        if (n.size() == 12 && n.substr(6) == "CS.BIN" && n.rfind("P", 0) != 0) {
+            fs::path tm = e.path().parent_path() / (n.substr(0, 6) + "TM.BIN");
+            if (fs::exists(tm, ec)) out.push_back({e.path(), tm});
+        }
+    }
+    out.push_back({root / "DAT/TEXT/JTWNDCST.BIN", root / "DAT/TEXT/JTWNDTIM.BIN"});
+    out.push_back({root / "DAT/TRAINING/JTRGCAST.BIN", root / "DAT/TRAINING/JTRNGTIM.BIN"});
+    out.push_back({root / "DAT/MODEL/PGFGTC00.BIN", root / "DAT/MODEL/PGFGTW00.BIN"});
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+static int checkUi(const fs::path& root) {
+    int failures = 0, sheets = 0, parts = 0, drawn = 0, pieces = 0;
+    for (auto& [csPath, tmPath] : uiPairs(root)) {
+        Bytes cs, tm;
+        if (!readFile(csPath, cs) || !readFile(tmPath, tm)) continue;
+        std::vector<UiCellGroup> cg;
+        std::vector<UiTexGroup> tg;
+        std::string err;
+        if (!loadCellSheet(cs, cg, &err) || !loadTexturePack(tm, tg, &err)) {
+            std::printf("FAIL ui %s: %s\n", csPath.filename().string().c_str(), err.c_str());
+            ++failures; continue;
+        }
+        ++sheets;
+        for (size_t gi = 0; gi < cg.size(); ++gi) {
+            const UiTexGroup* t = uiTexGroupFor(tg, gi);
+            pieces += int(cg[gi].pieces.size());
+            for (auto& p : cg[gi].parts) {
+                ++parts;
+                Image img;
+                if (t && renderUiPart(*t, p, img)) ++drawn;
+            }
+        }
+    }
+    // Font mapping: every encoded character code must have a white glyph part in CMFONT.
+    Bytes fcs;
+    std::vector<UiCellGroup> fg;
+    if (readFile(root / "DAT/COMMON/CMFONTCS.BIN", fcs) && loadCellSheet(fcs, fg) && !fg.empty()) {
+        int missing = 0;
+        for (int c = 4; c <= 0xe8; ++c)
+            if (uiGlyphPartForCode(UiFont::White, uint8_t(c), false) >= int(fg[0].parts.size())) ++missing;
+        for (const char* s = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"; *s; ++s)
+            if (uiGlyphPart(UiFont::Orange, *s) < 0 || uiGlyphPart(UiFont::Orange, *s) >= int(fg[0].parts.size())) ++missing;
+        if (missing) { std::printf("FAIL ui font: %d codes without a glyph part\n", missing); ++failures; }
+    }
+    std::printf("ui     : %d cell sheets, %d pieces, %d parts (%d inside their texture pages)\n", sheets, pieces, parts, drawn);
+    return failures;
+}
+
+static int dumpUi(const fs::path& root, const std::string& name, const fs::path& out, bool allParts) {
+    for (auto& [csPath, tmPath] : uiPairs(root)) {
+        if (csPath.filename().string().rfind(name, 0) != 0) continue;
+        Bytes cs, tm;
+        std::vector<UiCellGroup> cg;
+        std::vector<UiTexGroup> tg;
+        std::string err;
+        if (!readFile(csPath, cs) || !readFile(tmPath, tm) || !loadCellSheet(cs, cg, &err) || !loadTexturePack(tm, tg, &err)) {
+            std::printf("cannot load %s: %s\n", csPath.string().c_str(), err.c_str());
+            return 1;
+        }
+        std::vector<Image> imgs;
+        for (size_t gi = 0; gi < cg.size(); ++gi) {
+            const UiTexGroup* t = uiTexGroupFor(tg, gi);
+            if (!t) continue;
+            const size_t n = allParts ? cg[gi].parts.size() : cg[gi].pieces.size();
+            for (size_t i = 0; i < n; ++i) {
+                Image img;
+                int ox, oy;
+                if (allParts) renderUiPart(*t, cg[gi].parts[i], img);
+                else renderUiPiece(*t, cg[gi], int(i), img, ox, oy);
+                if (img.w > 0 && img.h > 0) imgs.push_back(std::move(img));
+            }
+        }
+        // shelf layout, 512 wide
+        int x = 0, y = 0, rowH = 0, W = 512;
+        std::vector<std::pair<int, int>> pos;
+        for (auto& im : imgs) {
+            W = std::max(W, im.w + 2);
+            if (x + im.w + 2 > W) { x = 0; y += rowH + 2; rowH = 0; }
+            pos.push_back({x, y});
+            x += im.w + 2;
+            rowH = std::max(rowH, im.h);
+        }
+        Image sheet;
+        sheet.resize(W, y + rowH + 2, 0);
+        for (size_t i = 0; i < imgs.size(); ++i)
+            for (int yy = 0; yy < imgs[i].h; ++yy)
+                for (int xx = 0; xx < imgs[i].w; ++xx)
+                    sheet.px[size_t(pos[i].second + yy) * W + pos[i].first + xx] = imgs[i].px[size_t(yy) * imgs[i].w + xx];
+        std::printf("%s: %zu images -> %s (scratch only, never commit)\n", csPath.filename().string().c_str(), imgs.size(),
+                    out.string().c_str());
+        return writeBmp(out, sheet) ? 0 : 1;
+    }
+    std::printf("no UI sheet starting with %s\n", name.c_str());
+    return 1;
+}
+
 static int dumpModel(const fs::path& root, const std::string& id, const fs::path& out, int onlyClip) {
     // "M005GREY" searches DAT/MODEL; "EFFECT/MEFT0024" searches another DAT folder.
     fs::path dir = root / "DAT" / "MODEL";
@@ -231,6 +439,176 @@ static int dumpModel(const fs::path& root, const std::string& id, const fs::path
         }
     }
     return writeBmp(out, sheet) ? 0 : 1;
+}
+
+// Perspective software rasterizer (z-buffer, perspective-correct UV, near-plane clipping) used by
+// the arena preview. PS1 axes: y is down, so the camera "up" is -y.
+struct PCam {
+    float eye[3], fwd[3], right[3], up[3], focal;
+    int w, h;
+    static PCam look(const float e[3], const float t[3], int w, int h, float fovDeg) {
+        PCam c{};
+        float f[3] = {t[0] - e[0], t[1] - e[1], t[2] - e[2]};
+        float l = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+        for (float& x : f) x /= l;
+        const float wu[3] = {0, -1, 0};
+        float r[3] = {f[1] * wu[2] - f[2] * wu[1], f[2] * wu[0] - f[0] * wu[2], f[0] * wu[1] - f[1] * wu[0]};
+        l = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+        for (float& x : r) x /= l;
+        const float u[3] = {r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]};
+        for (int i = 0; i < 3; ++i) { c.eye[i] = e[i]; c.fwd[i] = f[i]; c.right[i] = r[i]; c.up[i] = u[i]; }
+        c.w = w; c.h = h;
+        c.focal = (h * 0.5f) / std::tan(fovDeg * 3.14159265f / 360.f);
+        return c;
+    }
+};
+
+static void rasterPerspective(const Model& m, const std::vector<Image>& tex, const std::vector<Mat34>& mats, const PCam& cam,
+                              Image& dst, std::vector<float>& zb) {
+    struct V { float x, y, z, u, v; };  // camera space + texel
+    const float nearZ = 16.f;
+    auto toCam = [&](float x, float y, float z) {
+        const float d[3] = {x - cam.eye[0], y - cam.eye[1], z - cam.eye[2]};
+        return V{d[0] * cam.right[0] + d[1] * cam.right[1] + d[2] * cam.right[2],
+                 d[0] * cam.up[0] + d[1] * cam.up[1] + d[2] * cam.up[2],
+                 d[0] * cam.fwd[0] + d[1] * cam.fwd[1] + d[2] * cam.fwd[2], 0, 0};
+    };
+    auto drawTri = [&](V a, V b, V c, const Image& t, int blend) {
+        V in[3] = {a, b, c}, poly[4];
+        int n = 0;
+        for (int i = 0; i < 3; ++i) {  // clip against the near plane
+            const V& p = in[i];
+            const V& q = in[(i + 1) % 3];
+            const bool pi = p.z >= nearZ, qi = q.z >= nearZ;
+            if (pi) poly[n++] = p;
+            if (pi != qi) {
+                const float f = (nearZ - p.z) / (q.z - p.z);
+                poly[n++] = {p.x + (q.x - p.x) * f, p.y + (q.y - p.y) * f, nearZ, p.u + (q.u - p.u) * f, p.v + (q.v - p.v) * f};
+            }
+        }
+        if (n < 3) return;
+        struct S { float x, y, iz, uz, vz; };
+        S s[4];
+        for (int i = 0; i < n; ++i) {
+            const float iz = 1.f / poly[i].z;
+            s[i] = {cam.w * 0.5f + poly[i].x * cam.focal * iz, cam.h * 0.5f - poly[i].y * cam.focal * iz, iz, poly[i].u * iz,
+                    poly[i].v * iz};
+        }
+        for (int k = 1; k + 1 < n; ++k) {
+            const S &A = s[0], &B = s[k], &C = s[k + 1];
+            const float den = (B.y - C.y) * (A.x - C.x) + (C.x - B.x) * (A.y - C.y);
+            if (std::fabs(den) < 1e-6f) continue;
+            const int x0 = std::max(0, int(std::floor(std::min({A.x, B.x, C.x})))), x1 = std::min(cam.w - 1, int(std::ceil(std::max({A.x, B.x, C.x}))));
+            const int y0 = std::max(0, int(std::floor(std::min({A.y, B.y, C.y})))), y1 = std::min(cam.h - 1, int(std::ceil(std::max({A.y, B.y, C.y}))));
+            for (int y = y0; y <= y1; ++y)
+                for (int x = x0; x <= x1; ++x) {
+                    const float px = x + 0.5f, py = y + 0.5f;
+                    const float l0 = ((B.y - C.y) * (px - C.x) + (C.x - B.x) * (py - C.y)) / den;
+                    const float l1 = ((C.y - A.y) * (px - C.x) + (A.x - C.x) * (py - C.y)) / den;
+                    const float l2 = 1 - l0 - l1;
+                    if (l0 < 0 || l1 < 0 || l2 < 0) continue;
+                    const float iz = l0 * A.iz + l1 * B.iz + l2 * C.iz;
+                    float& zz = zb[size_t(y) * cam.w + x];
+                    if (iz <= zz) continue;
+                    const int u = int((l0 * A.uz + l1 * B.uz + l2 * C.uz) / iz) & 255;
+                    const int v = int((l0 * A.vz + l1 * B.vz + l2 * C.vz) / iz) & 255;
+                    const uint32_t col = t.at(u, v);
+                    if (!(col >> 24)) continue;
+                    uint32_t& d = dst.px[size_t(y) * dst.w + x];
+                    if (blend == 0) { zz = iz; d = col; continue; }
+                    if (blend == 3) continue;
+                    uint32_t o = 0xff000000u;
+                    for (int sh = 0; sh < 24; sh += 8) {
+                        const int dc = int((d >> sh) & 255), sc = int((col >> sh) & 255);
+                        const int r = blend == 1 ? (dc + sc) / 2 : blend == 4 ? dc + sc / 4 : dc + sc;
+                        o |= uint32_t(std::min(255, r)) << sh;
+                    }
+                    d = o;
+                }
+        }
+    };
+    for (int pass = 0; pass < 2; ++pass)  // opaque first, then blended
+        for (size_t i = 0; i < m.nodes.size(); ++i) {
+            if (m.nodes[i].mesh < 0) continue;
+            const ModelMesh& mesh = m.meshes[size_t(m.nodes[i].mesh)];
+            std::vector<V> vs(mesh.verts.size());
+            for (size_t k = 0; k < mesh.verts.size(); ++k) {
+                float x, y, z;
+                xform(mats[i], mesh.verts[k][0], mesh.verts[k][1], mesh.verts[k][2], x, y, z);
+                vs[k] = toCam(x, y, z);
+            }
+            for (const ModelPrim& pr : mesh.prims) {
+                if ((pr.blend != 0) != (pass == 1)) continue;
+                V q[4];
+                for (int k = 0; k < pr.count; ++k) { q[k] = vs[pr.v[k]]; q[k].u = pr.u[k] + 0.5f; q[k].v = pr.t[k] + 0.5f; }
+                drawTri(q[0], q[1], q[2], tex[pr.clut], pr.blend);
+                if (pr.count == 4) drawTri(q[1], q[3], q[2], tex[pr.clut], pr.blend);
+            }
+        }
+}
+
+// Renders a battle arena (DAT/EFFECT/MEFT10xx) from an orbit camera: yaw/pitch in degrees,
+// distance as a multiple of the arena radius. Prints the node table for analysis.
+static int dumpArena(const fs::path& root, const std::string& id, const fs::path& out, float yawDeg, float pitchDeg,
+                     float distMul) {
+    Bytes b;
+    std::string name = id;
+    if (name.size() == 4) name = "MEFT" + name;  // "1001" -> MEFT1001
+    if (!readFile(root / "DAT" / "EFFECT" / (name + ".BIN"), b)) { std::printf("cannot read %s\n", name.c_str()); return 1; }
+    Model m; std::string err;
+    if (!loadModel(b, m, err)) { std::printf("%s: %s\n", name.c_str(), err.c_str()); return 1; }
+    Pose pose;
+    samplePose(m, 0.f, pose);
+    std::vector<Mat34> mats;
+    poseMatrices(m, pose, mats);
+    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+    size_t prims = 0;
+    std::printf("%s: %zu nodes, %zu meshes, %zu pages, %zu cluts\n", name.c_str(), m.nodes.size(), m.meshes.size(), m.pages.size(), m.cluts.size());
+    {
+        Arena ar;
+        std::string e2;
+        const int num = std::atoi(name.c_str() + 4) - 1000;
+        if (loadArena(b, num, ar, e2))
+            std::printf("ground: %s, play y %.0f, centre (%.0f, %.0f), walk radius %.0f  [%s]\n", ar.flat ? "flat plane" : "floor grid",
+                        ar.playY, ar.centerX, ar.centerZ, ar.walkRadius, arenaName(num));
+    }
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+        const ModelTrack& tr = m.tracks[size_t(m.nodes[i].track)];
+        float nl[3] = {1e30f, 1e30f, 1e30f}, nh[3] = {-1e30f, -1e30f, -1e30f};
+        int np = 0, blendCnt[5] = {}, unlit = 0;
+        if (m.nodes[i].mesh >= 0) {
+            const ModelMesh& me = m.meshes[size_t(m.nodes[i].mesh)];
+            np = int(me.prims.size());
+            for (auto& p : me.prims) { blendCnt[std::min<int>(p.blend, 4)]++; unlit += !p.lit; }
+            for (auto& v : me.verts) {
+                float w[3];
+                xform(mats[i], v[0], v[1], v[2], w[0], w[1], w[2]);
+                for (int k = 0; k < 3; ++k) { nl[k] = std::min(nl[k], w[k]); nh[k] = std::max(nh[k], w[k]); }
+            }
+            for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], nl[k]); hi[k] = std::max(hi[k], nh[k]); }
+        }
+        prims += size_t(np);
+        std::printf("  node %2zu parent %2d prims %4d unlit %4d blend[%d %d %d %d %d] keys p%zu r%zu s%zu pos0 (%d %d %d) rot0 (%d %d %d)",
+                    i, m.nodes[i].parent, np, unlit, blendCnt[0], blendCnt[1], blendCnt[2], blendCnt[3], blendCnt[4],
+                    tr.pos.size(), tr.rot.size(), tr.scl.size(), tr.pos[0].x, tr.pos[0].y, tr.pos[0].z, tr.rot[0].x,
+                    tr.rot[0].y, tr.rot[0].z);
+        if (np) std::printf(" box x[%.0f %.0f] y[%.0f %.0f] z[%.0f %.0f]", nl[0], nh[0], nl[1], nh[1], nl[2], nh[2]);
+        std::printf("\n");
+    }
+    std::printf("  total prims %zu, bounds x[%.0f %.0f] y[%.0f %.0f] z[%.0f %.0f]\n", prims, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
+    for (size_t c = 0; c < m.cluts.size(); ++c)
+        std::printf("  clut %zu: page %d x %d y %d\n", c, m.cluts[c][0], m.cluts[c][1], m.cluts[c][2]);
+    std::vector<Image> tex;
+    for (size_t c = 0; c < m.cluts.size(); ++c) tex.push_back(m.textureFor(c));
+    const float radius = std::max(hi[0] - lo[0], hi[2] - lo[2]) * 0.5f;
+    const float tgt[3] = {0, 0, 0};
+    const float yaw = yawDeg * 3.14159265f / 180.f, pitch = pitchDeg * 3.14159265f / 180.f, dist = radius * distMul;
+    const float eye[3] = {std::sin(yaw) * std::cos(pitch) * dist, -std::sin(pitch) * dist, -std::cos(yaw) * std::cos(pitch) * dist};
+    Image img;
+    img.resize(640, 480, rgba(20, 20, 30));
+    std::vector<float> zb(size_t(img.w) * img.h, 0.f);
+    rasterPerspective(m, tex, mats, PCam::look(eye, tgt, img.w, img.h, 60.f), img, zb);
+    return writeBmp(out, img) ? 0 : 1;
 }
 
 // Every effect model (DAT/EFFECT/MEFT*) in one sheet: 4 frames of clip 0 per row, 2 effects per row.
@@ -285,6 +663,13 @@ int main(int argc, char** argv) {
             return dumpField(root, argv[i + 1], argv[i + 2], i + 3 < argc && !std::strcmp(argv[i + 3], "--overlay"));
         if (!std::strcmp(argv[i], "--dump-sprite") && i + 2 < argc) return dumpSprite(root, argv[i + 1], argv[i + 2]);
         if (!std::strcmp(argv[i], "--sheet-effects") && i + 1 < argc) return sheetEffects(root, argv[i + 1]);
+        if (!std::strcmp(argv[i], "--dump-arena") && i + 2 < argc)
+            return dumpArena(root, argv[i + 1], argv[i + 2], i + 3 < argc ? float(std::atof(argv[i + 3])) : 30.f,
+                             i + 4 < argc ? float(std::atof(argv[i + 4])) : 30.f, i + 5 < argc ? float(std::atof(argv[i + 5])) : 1.6f);
+        if (!std::strcmp(argv[i], "--dump-ui") && i + 2 < argc)
+            return dumpUi(root, argv[i + 1], argv[i + 2], i + 3 < argc && !std::strcmp(argv[i + 3], "parts"));
+        if (!std::strcmp(argv[i], "--dump-text") && i + 1 < argc)
+            return dumpText(root, argv[i + 1], i + 2 < argc ? int(std::strtol(argv[i + 2], nullptr, 0)) : -1);
         if (!std::strcmp(argv[i], "--dump-model") && i + 2 < argc)
             return dumpModel(root, argv[i + 1], argv[i + 2], i + 3 < argc ? std::atoi(argv[i + 3]) : -1);
     }
@@ -346,6 +731,34 @@ int main(int argc, char** argv) {
     std::printf("field  : %d MASK/TMPK sets (%d walk maps, %d trigger maps, %d piece tables)\n", fieldData, walkMaps, trigMaps, pieceSets);
     std::printf("overlay: %d WSTAG parsed (%d other layout), %d scene objects (%d without piece), %d event actors\n",
                 overlays, overlaySkipped, objects, objNoPiece, actors);
+    failures += checkText(root);
+    failures += checkUi(root);
+    int talkActors = 0, talkEntries = 0;
+    for (auto& e : fs::directory_iterator(root / "PRO")) {
+        const std::string n = e.path().filename().string();
+        if (n.rfind("WSTAG", 0) != 0) continue;
+        Bytes b; StageOverlay ov;
+        if (!readFile(e.path(), b) || !loadStageOverlay(b, ov)) continue;
+        for (const auto& a : ov.actors)
+            if (!a.talk.empty()) { ++talkActors; talkEntries += int(a.talk.size()); }
+    }
+    std::printf("talk   : %d event actors with talk tables, %d talk entries\n", talkActors, talkEntries);
+    // 3D battle arenas DAT/EFFECT/MEFT1001..1055: every one must load (or be a known other layout,
+    // which falls back to another arena) and have somewhere to stand.
+    int arenas = 0, arenaSkipped = 0, arenaFlat = 0;
+    for (int n = 1; n <= kArenaCount; ++n) {
+        Bytes b; Arena a; std::string err;
+        const fs::path f = root / "DAT" / "EFFECT" / (arenaFileName(n) + ".BIN");
+        if (!readFile(f, b)) { std::printf("FAIL arena %s: missing\n", arenaFileName(n).c_str()); ++failures; continue; }
+        if (!loadArena(b, n, a, err)) {
+            std::printf("SKIP arena %s: %s (falls back to %s)\n", arenaFileName(n).c_str(), err.c_str(), arenaFileName(arenaFallback(n)).c_str());
+            ++arenaSkipped; continue;
+        }
+        if (a.walkRadius < 3000.f || !a.walkable(0, 0)) { std::printf("FAIL arena %s: no floor at the centre\n", arenaFileName(n).c_str()); ++failures; }
+        ++arenas;
+        arenaFlat += a.flat;
+    }
+    std::printf("arenas : %d loaded (%d without floor model: flat), %d other layout (fallback)\n", arenas, arenaFlat, arenaSkipped);
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "OK", failures);
     return failures ? 1 : 0;
 }

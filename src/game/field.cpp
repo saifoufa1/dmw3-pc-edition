@@ -1,4 +1,4 @@
-﻿#include "game/field.h"
+#include "game/field.h"
 
 #include <algorithm>
 #include <cmath>
@@ -114,6 +114,7 @@ void Field::addOriginalNpcs() {
     std::map<int, std::map<int, int>> votes;
     std::map<int, const OverlayActor*> first;
     for (const auto& a : overlay_.actors) {
+        if (a.charId == 1) continue;  // the player's own record
         votes[a.slot][a.charId]++;
         if (!first.count(a.slot * 1000 + a.charId)) first[a.slot * 1000 + a.charId] = &a;
     }
@@ -217,7 +218,28 @@ bool Field::loadStage(size_t index, std::string& err, int arriveX, int arriveY) 
     talkNpc_ = -1;
     status_ = "Stage " + id + (haveFile ? "" : "  (no stage data yet: auto walls - press F2 to edit)");
     statusTimer_ = 150;
+    if (story_) story_->onStage(id);
     return true;
+}
+
+bool Field::warpTo(const std::string& stage, int x, int y) {
+    auto it = std::find(stageIds_.begin(), stageIds_.end(), stage);
+    if (it == stageIds_.end()) return false;
+    std::string err;
+    return loadStage(size_t(it - stageIds_.begin()), err, x, y);
+}
+
+void Field::reloadPartner() {
+    if (auto sp = sprites_.get(party_.partnerId)) partner_.sprite = sp;
+    partner_.anim = -1;
+    partner_.tick();
+}
+
+void Field::saveStory() {
+    if (!story_) return;
+    const bool ok = story_->saveGame(Story::defaultSavePath(), stageId(), int(player_.x), int(player_.y));
+    status_ = ok ? "Game saved" : "SAVE FAILED: " + Story::defaultSavePath().string();
+    statusTimer_ = 120;
 }
 
 void Field::buildNpcs() {
@@ -236,7 +258,71 @@ void Field::buildNpcs() {
                 if (!anims[a].keys.empty()) { n.actor.anim = int(a); break; }
         }
         n.defeated = defeated_.count(stageIds_[stageIndex_] + "#" + std::to_string(i)) > 0;
+        for (const auto& a : overlay_.actors)  // same spot as an original event actor -> its talk table
+            if (a.charId != 1 && !a.talk.empty() && std::abs(a.x - n.def.x) <= 4 && std::abs(a.y - n.def.y) <= 4) {
+                n.origSlot = a.slot;
+                break;
+            }
         npcs_.push_back(std::move(n));
+    }
+    if (story_) {
+        storyRev_ = story_->revision();
+        for (const StoryActor* sa : story_->actorsOn(stageIds_[stageIndex_])) {
+            NpcRt n;
+            n.def = sa->def;
+            n.storyId = sa->id;
+            n.actor.sprite = sprites_.get(n.def.sprite);
+            n.actor.x = float(n.def.x);
+            n.actor.y = float(n.def.y);
+            n.actor.dir = Dir(n.def.dir & 7);
+            n.actor.tick();
+            npcs_.push_back(std::move(n));
+        }
+    }
+}
+
+void Field::startTalk(size_t i) {
+    NpcRt& n = npcs_[i];
+    n.actor.dir = dirFromVector(player_.x - n.actor.x, player_.y - n.actor.y);
+    player_.dir = dirFromVector(n.actor.x - player_.x, n.actor.y - player_.y);
+    if (story_) {
+        if (!n.storyId.empty()) {
+            if (!story_->onTalk(n.storyId)) story_->sayRef(n.def.text, n.def.name, "...");
+            return;
+        }
+        if (n.origSlot >= 0 && story_->sayOriginal(stageId(), overlay_, n.origSlot, n.def.name)) return;
+        story_->sayRef(n.def.text, n.def.name, "...");
+        return;
+    }
+    talkNpc_ = int(i);
+    talkPage_ = 0;
+    talkPages_.clear();
+    std::string t = n.def.text;
+    size_t p;
+    while ((p = t.find('|')) != std::string::npos) { talkPages_.push_back(t.substr(0, p)); t.erase(0, p + 1); }
+    talkPages_.push_back(t);
+}
+
+// Applies what the story asked for: fights, warps, partner changes, saves, NPC visibility.
+void Field::handleStoryRequests() {
+    if (!story_) return;
+    if (story_->takePartnerChanged()) reloadPartner();
+    if (auto w = story_->takeWarp()) warpTo(w->stage, w->x, w->y);
+    if (story_->takeSaveRequest()) saveStory();
+    if (story_->revision() != storyRev_ && !battle_) buildNpcs();
+    if (auto id = story_->takeFight()) {
+        battleNpc_ = -1;
+        for (size_t i = 0; i < npcs_.size(); ++i)
+            if (npcs_[i].storyId == *id) battleNpc_ = int(i);
+        const StoryActor* sa = story_->actor(*id);
+        const NpcDef* d = battleNpc_ >= 0 ? &npcs_[size_t(battleNpc_)].def : sa ? &sa->def : nullptr;
+        if (d) {
+            battle_ = BattleRequest{d->sprite, d->name, d->level, d->kind == NpcKind::Boss};
+            if (sa && !sa->enemySprite.empty()) { battle_->enemySprite = sa->enemySprite; battle_->enemyName = sa->enemyName; }
+            storyBattle_ = *id;
+        } else {
+            story_->onBattleEnd(*id, true);  // unknown actor: do not soft-lock the script
+        }
     }
 }
 
@@ -278,6 +364,19 @@ std::optional<BattleRequest> Field::takeBattleRequest() {
 }
 
 void Field::endBattle(bool won) {
+    if (story_ && !storyBattle_.empty()) {
+        const std::string id = storyBattle_;
+        storyBattle_.clear();
+        if (!won) {  // back to the start point; the story decides what happens next
+            float sx, sy;
+            if (data_.spawnX >= 0) { sx = float(data_.spawnX); sy = float(data_.spawnY); } else findAutoSpawn(sx, sy);
+            placeParty(sx, sy);
+        }
+        story_->onBattleEnd(id, won);
+        battleNpc_ = -1;
+        touchCooldown_ = 90;
+        return;
+    }
     if (battleNpc_ >= 0 && battleNpc_ < int(npcs_.size())) {
         if (won) {
             npcs_[battleNpc_].defeated = true;
@@ -347,6 +446,18 @@ void Field::update(const Input& in) {
         return;
     }
 
+    handleStoryRequests();
+    if (story_ && story_->busy() && !editor_) {
+        story_->update(in);
+        handleStoryRequests();
+        player_.move = partner_.move = Move::Idle;
+        player_.tick();
+        partner_.tick();
+        for (auto& n : npcs_) n.actor.tick();
+        updateCamera();
+        return;
+    }
+
     if (in.nextStageP || in.prevStageP) {
         size_t n = stageIds_.size();
         size_t idx = in.nextStageP ? (stageIndex_ + 1) % n : (stageIndex_ + n - 1) % n;
@@ -368,6 +479,7 @@ void Field::update(const Input& in) {
     if (editor_) updateEditor(in);
 
     // ---- player movement ----
+    const float prevX = player_.x, prevY = player_.y;
     float ix = float(in.right) - float(in.left), iy = float(in.down) - float(in.up);
     const float speed = (editor_ ? 2.f : 1.f) * (in.run ? kRunSpeed : kWalkSpeed);
     if (ix != 0 || iy != 0) {
@@ -407,17 +519,7 @@ void Field::update(const Input& in) {
                 float d = dist(player_.x, player_.y, n.actor.x, n.actor.y);
                 if (d < bestD) { bestD = d; best = int(i); }
             }
-            if (best >= 0) {
-                talkNpc_ = best;
-                talkPage_ = 0;
-                talkPages_.clear();
-                std::string t = npcs_[best].def.text;
-                size_t p;
-                while ((p = t.find('|')) != std::string::npos) { talkPages_.push_back(t.substr(0, p)); t.erase(0, p + 1); }
-                talkPages_.push_back(t);
-                npcs_[best].actor.dir = dirFromVector(player_.x - npcs_[best].actor.x, player_.y - npcs_[best].actor.y);
-                player_.dir = dirFromVector(npcs_[best].actor.x - player_.x, npcs_[best].actor.y - player_.y);
-            }
+            if (best >= 0) startTalk(size_t(best));
         }
         // ---- touch a fighter -> battle ----
         if (touchCooldown_ == 0 && !battle_) {
@@ -427,15 +529,30 @@ void Field::update(const Input& in) {
                 float range = n.def.kind == NpcKind::Boss ? kTouchRange + 6 : kTouchRange;
                 if (dist(player_.x, player_.y, n.actor.x, n.actor.y) < range ||
                     dist(partner_.x, partner_.y, n.actor.x, n.actor.y) < range) {
+                    touchCooldown_ = 60;
+                    if (!n.storyId.empty() && story_) {
+                        if (story_->onTouch(n.storyId)) break;  // the event decides (usually 'fight')
+                        storyBattle_ = n.storyId;
+                    }
                     battle_ = BattleRequest{n.def.sprite, n.def.name, n.def.level, n.def.kind == NpcKind::Boss};
+                    if (const StoryActor* sa = story_ && !n.storyId.empty() ? story_->actor(n.storyId) : nullptr)
+                        if (!sa->enemySprite.empty()) { battle_->enemySprite = sa->enemySprite; battle_->enemyName = sa->enemyName; }
                     battleNpc_ = int(i);
                     break;
                 }
             }
         }
         // ---- exits ----
+        if (story_) story_->onEnter(stageId(), player_.x, player_.y);
         for (const auto& e : data_.exits) {
             if (player_.x >= e.x && player_.x < e.x + e.w && player_.y >= e.y && player_.y < e.y + e.h) {
+                std::string msg;
+                if (story_ && story_->exitBlocked(stageId(), e.target, msg)) {
+                    player_.x = prevX;  // step back out of the exit zone
+                    player_.y = prevY;
+                    story_->say("", {msg});
+                    break;
+                }
                 pendingExit_ = e;
                 fadingOut_ = true;
                 fade_ = 1;
@@ -596,6 +713,7 @@ void Field::render() {
     }
     if (editor_) renderEditor();
 
+    if (story_ && !editor_) story_->render();
     if (talkNpc_ >= 0) {
         gfx::fillRect(12, 168, 296, 62, 0xd8301808u);
         gfx::strokeRect(12, 168, 296, 62, 0xffc0e0ffu);
@@ -605,8 +723,10 @@ void Field::render() {
 
 void Field::renderHud(int ww, int wh) {
     char line[256];
+    const bool cine = story_ && story_->busy() && !editor_;  // story scene: keep the screen clean
     // NPC labels
     for (const auto& n : npcs_) {
+        if (cine) break;
         if (n.defeated && !editor_) continue;
         int wx, wy;
         float top = n.def.kind == NpcKind::Boss ? 52.f : 38.f;
@@ -623,7 +743,7 @@ void Field::renderHud(int ww, int wh) {
             gfx::drawTextCentered(wx, wy, ("-> " + e.target).c_str(), 0xff40ffffu);
         }
 
-    if (hud_) {
+    if (hud_ && !cine) {
         std::snprintf(line, sizeof line, "DMW3 PC Edition v%s | Stage %s (%zu/%zu)  pos %d,%d  %s%s", DMW3_VERSION,
                       stageIds_[stageIndex_].c_str(), stageIndex_ + 1, stageIds_.size(), int(player_.x), int(player_.y),
                       "", editor_ ? "  [EDITOR]" : "");
@@ -645,8 +765,9 @@ void Field::renderHud(int ww, int wh) {
         gfx::drawText(10, y + 4, line, 0xffffffffu);
         gfx::drawText(10, wh - 12, "EDITOR: Ctrl+S save  F2 exit  (walls ignored while editing)", 0xff40ffffu);
     }
-    if (statusTimer_ > 0) gfx::drawTextCentered(ww / 2, 46 + (editor_ ? 110 : 0), status_.c_str(), 0xff60ffffu);
+    if (statusTimer_ > 0 && !cine) gfx::drawTextCentered(ww / 2, 46 + (editor_ ? 110 : 0), status_.c_str(), 0xff60ffffu);
 
+    if (story_ && !editor_) story_->renderHud(ww, wh);
     if (talkNpc_ >= 0) {
         int x, y;
         gfx::toWindow(20, 176, x, y);

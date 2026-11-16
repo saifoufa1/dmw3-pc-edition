@@ -3,15 +3,21 @@
 //   dmw3.exe [--data <dir>] [--stage S200]
 //   testing: [--screenshot out.bmp --frames N] [--autowalk] [--battle] [--boss <sprite>] [--autobattle]
 //            [--dv] (full digivolve gauge) [--form 0..3] (start digivolved) [--digivolve-at FRAME] [--attack 1..3]
+//            [--arena 1..55] (battle arena MEFT10xx) [--cam-yaw DEG] (battle camera angle)
+//   story:   [--new-game] [--no-story] [--story-flags a,b] [--story-event NAME] [--pos X Y]
+//            [--confirm-at FRAME]... [--confirm-every N] [--walk lrud FROM TO]
 #include <windows.h>
 #include <shellapi.h>
 #include <GL/gl.h>
 
+#include <cmath>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "core/bytes.h"
 #include "game/game.h"
+#include "ui/ui_preview.h"
 
 namespace fs = std::filesystem;
 using namespace dw3;
@@ -20,6 +26,7 @@ namespace {
 
 int g_winW = 960, g_winH = 720;
 bool g_running = true;
+int g_wheel = 0;  // mouse wheel notches since the last tick (+ = toward the user)
 
 // ---- XInput, loaded dynamically so the exe runs even without the DLL. ----
 struct XGamepad { WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; };
@@ -38,6 +45,7 @@ void loadXInput() {
 LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_SIZE: g_winW = LOWORD(lp); g_winH = HIWORD(lp); return 0;
+        case WM_MOUSEWHEEL: g_wheel += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -1 : 1; return 0;  // battle camera zoom
         case WM_CLOSE: g_running = false; return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
     }
@@ -49,6 +57,7 @@ struct Held {
     bool key[256];
     bool up, down, left, right, run, confirm, atk1, atk2, atk3, guard, digivolve;
     bool next, prev, partner, hud, editor, equip, quit, lmb, rmb;
+    float camTurn, camTilt;  // right stick (battle camera)
 };
 
 Held poll(HWND hwnd, bool focused) {
@@ -97,6 +106,9 @@ Held poll(HWND hwnd, bool focused) {
         h.next |= (w & 0x0200) != 0;
         h.hud |= (w & 0x0020) != 0;                // Back
         h.equip |= (w & 0x0010) != 0;              // Start
+        auto axis = [](SHORT v) { const float f = float(v) / 32767.f; return std::fabs(f) < 0.25f ? 0.f : f; };
+        h.camTurn = axis(xs.pad.rx);
+        h.camTilt = -axis(xs.pad.ry);
     }
     return h;
 }
@@ -148,11 +160,30 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     bool autowalk = false, autobattle = false;
     int digivolveAt = -1;  // testing: press digivolve on this frame
     int autoAttack = 0;    // testing: use only this move (1..3) every 100 frames
+    std::vector<int> confirmAt;  // testing: press Space on these frames
+    int confirmEvery = 0;        // testing: press Space every N frames
+    std::string walkDir;         // testing: hold a direction (l/r/u/d, combinable) from frame A to B
+    int walkFrom = 0, walkTo = 0;
     DebugOptions dbg;
+    std::string uiPreview;  // --ui-preview MODE: original-UI component preview (src/ui/ui_preview.h)
     auto a = args();
     for (size_t i = 0; i < a.size(); ++i) {
         if (a[i] == "--data" && i + 1 < a.size()) dataArg = a[++i];
-        else if (a[i] == "--stage" && i + 1 < a.size()) stage = a[++i];
+        else if (a[i] == "--stage" && i + 1 < a.size()) { stage = a[++i]; dbg.stageGiven = true; }
+        else if (a[i] == "--new-game") dbg.newGame = true;
+        else if (a[i] == "--no-story") dbg.noStory = true;
+        else if (a[i] == "--story-event" && i + 1 < a.size()) dbg.storyEvent = a[++i];
+        else if (a[i] == "--story-flags" && i + 1 < a.size()) {
+            std::string f = a[++i], cur;
+            for (char ch : f + ",") {
+                if (ch == ',') { if (!cur.empty()) dbg.storyFlags.push_back(cur); cur.clear(); }
+                else cur += ch;
+            }
+        }
+        else if (a[i] == "--pos" && i + 2 < a.size()) { dbg.posX = std::stoi(a[i + 1]); dbg.posY = std::stoi(a[i + 2]); i += 2; }
+        else if (a[i] == "--confirm-at" && i + 1 < a.size()) confirmAt.push_back(std::stoi(a[++i]));
+        else if (a[i] == "--confirm-every" && i + 1 < a.size()) confirmEvery = std::stoi(a[++i]);
+        else if (a[i] == "--walk" && i + 3 < a.size()) { walkDir = a[i + 1]; walkFrom = std::stoi(a[i + 2]); walkTo = std::stoi(a[i + 3]); i += 3; }
         else if (a[i] == "--screenshot" && i + 1 < a.size()) shotPath = a[++i];
         else if (a[i] == "--frames" && i + 1 < a.size()) shotFrames = std::stoi(a[++i]);
         else if (a[i] == "--autowalk") autowalk = true;
@@ -164,7 +195,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--battle") dbg.startBattle = true;
         else if (a[i] == "--sizes") { dbg.startBattle = true; dbg.sizePanel = true; }
         else if (a[i] == "--dev") dbg.devTools = true;
+        else if (a[i] == "--arena" && i + 1 < a.size()) { dbg.startBattle = true; dbg.arena = std::stoi(a[++i]); }
+        else if (a[i] == "--cam-yaw" && i + 1 < a.size()) dbg.camYaw = std::stof(a[++i]);
         else if (a[i] == "--boss" && i + 1 < a.size()) { dbg.startBattle = true; dbg.battleSprite = a[++i]; }
+        else if (a[i] == "--ui-preview" && i + 1 < a.size()) uiPreview = a[++i];  // hud|hud2|result|levelup|window|font|sheets
     }
     if (!shotPath.empty() && shotFrames <= 0) shotFrames = 120;
 
@@ -210,7 +244,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     {
         Game game;
         std::string err;
-        if (!game.init(root, findStageDir(exeDir), stage, dbg, err)) {
+        std::unique_ptr<ui::Preview> preview;
+        if (!uiPreview.empty()) {
+            preview = std::make_unique<ui::Preview>();
+            if (!preview->init(root, uiPreview, err)) {
+                MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - UI preview", MB_ICONERROR);
+                g_running = false;
+                exitCode = 1;
+            }
+        } else if (!game.init(root, findStageDir(exeDir), stage, dbg, err)) {
             MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - load error", MB_ICONERROR);
             g_running = false;
             exitCode = 1;
@@ -256,6 +298,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                     h.atk2 = autoAttack == 2 && frame % 100 == 80;
                     h.atk3 = autoAttack == 3 && frame % 100 == 80;
                 }
+                for (int f : confirmAt) if (frame == f) h.confirm = true;
+                if (confirmEvery > 0 && frame % confirmEvery == 0 && frame > 0) h.confirm = true;
+                if (!walkDir.empty() && frame >= walkFrom && frame < walkTo) {
+                    h.left |= walkDir.find('l') != std::string::npos;
+                    h.right |= walkDir.find('r') != std::string::npos;
+                    h.up |= walkDir.find('u') != std::string::npos;
+                    h.down |= walkDir.find('d') != std::string::npos;
+                }
                 if (h.quit) g_running = false;
 
                 Input in;
@@ -278,13 +328,17 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                 in.lmbP = h.lmb && !prev.lmb;
                 in.rmbP = h.rmb && !prev.rmb;
                 in.lmbR = !h.lmb && prev.lmb;
+                in.camTurn = h.camTurn; in.camTilt = h.camTilt;
+                in.wheel = g_wheel; g_wheel = 0;
                 POINT pt;
                 if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) gfx::toVirtual(pt.x, pt.y, in.mx, in.my);
                 prev = h;
-                game.update(in);
+                if (preview) preview->update(in.confirmP);
+                else game.update(in);
             }
 
-            game.render(g_winW, g_winH);
+            if (preview) preview->render(g_winW, g_winH);
+            else game.render(g_winW, g_winH);
             ++frame;
             if (!shotPath.empty() && frame >= shotFrames) {
                 glFinish();

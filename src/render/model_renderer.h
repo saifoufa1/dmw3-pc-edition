@@ -35,6 +35,23 @@ struct ModelView {
     bool silhouette = false;    // flat colour (tint) instead of the texture
 };
 void drawModel(const Model& m, const ModelGpu& gpu, const Pose& pose, const ModelView& v);
+
+// 3D battle: a model placed in the world and drawn with the current perspective camera
+// (render/camera3d.h, Camera3D::begin() must be active). World = PS1 axes (y down).
+struct Camera3D;
+struct WorldPlace {
+    float x = 0, y = 0, z = 0;  // ground point (feet) in world units
+    float yaw = 0;              // radians; the model's front (-z) points to (-sin yaw, -cos yaw)
+    float scale = 1;            // model units -> world units
+    uint32_t tint = 0xffffffffu;
+    float flash = 0;
+    bool silhouette = false;
+    int passes = 3;             // bit 0: opaque prims, bit 1: semi-transparent prims
+    bool shade = true;          // lit prims use their normals (false: full colour)
+};
+void drawModelWorld(const Model& m, const ModelGpu& gpu, const Pose& pose, const Camera3D& cam, const WorldPlace& p);
+// Soft dark disc on the ground (contact shadow) in world space.
+void drawGroundShadow3D(float x, float y, float z, float radius, float alpha);
 // Soft dark ellipse on the ground (contact shadow).
 void drawGroundShadow(float cx, float cy, float rx, float ry, float alpha);
 
@@ -50,6 +67,7 @@ struct GameModel {
 class ModelCache {
 public:
     void setRoot(std::filesystem::path r) { root_ = std::move(r); }
+    const std::filesystem::path& root() const { return root_; }
     std::shared_ptr<GameModel> get(const std::string& id, std::string* err = nullptr);
 
 private:

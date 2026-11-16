@@ -5,6 +5,8 @@
 
 #include "game/battle.h"
 #include "game/field.h"
+#include "game/story.h"
+#include "game/story_text.h"
 #include "render/model_renderer.h"
 
 namespace dw3 {
@@ -16,11 +18,20 @@ struct DebugOptions {
     int startForm = 0;          // start battles already digivolved (0 = Rookie .. 3 = Mega)
     bool sizePanel = false;     // open the battle size dashboard (F3) at once
     bool devTools = false;      // --dev: developer tools (F3 size dashboard); off for players
+    int arena = 0;              // --arena N: fight in battle arena N (1..55) instead of the area's own
+    float camYaw = -999.f;      // --cam-yaw DEG: battle camera start angle
+    // story (testing)
+    bool stageGiven = false;    // --stage was passed: start there instead of the story start / save
+    bool newGame = false;       // --new-game: ignore the save file
+    bool noStory = false;       // --no-story: plain sandbox field (no chapter script)
+    std::vector<std::string> storyFlags;  // --story-flags a,b,c: set before play (skips the intro)
+    std::string storyEvent;     // --story-event NAME: run this event at once
+    int posX = -1, posY = -1;   // --pos X Y: place the player
 };
 
 class Game {
 public:
-    Game() : field_(sprites_, party_), battle_(sprites_, models_, party_) {}
+    Game() : field_(sprites_, party_), battle_(sprites_, models_, party_), story_(sprites_, party_) {}
     bool init(const std::filesystem::path& dataRoot, const std::filesystem::path& stageDir,
               const std::string& startStage, const DebugOptions& dbg, std::string& err);
     void update(const Input& in);
@@ -33,6 +44,8 @@ private:
     Party party_;
     Field field_;
     Battle battle_;
+    TextDb text_;
+    Story story_;
     Mode mode_ = Mode::Field;
     int trans_ = 0;
     BattleRequest pending_;

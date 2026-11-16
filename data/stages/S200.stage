@@ -8,7 +8,10 @@
 # ASUKA CITY - main streets (S200). Same city continues in S202 (south park) and S218 (bridge + east patio).
 # spawn: decoded player start of WSTAG200 (descriptor +0x2C/+0x30).
 # npc positions/sprites: decoded event actors of WSTAG200 (most common story variant per slot);
-#   names and lines are our own (original dialogue not decoded yet).
+#   when an NPC stands on an original event actor's spot, talking to it shows the ORIGINAL line from your
+#   disc (WSTAG talk table + USTALK00); the name/line here are only a fallback.
+# story NPCs (Tamer Service, Teddy, Kail, Tamer Genji at 1088,288, Black Agumon at the west bridge)
+#   live in data/story/chapter1.story.
 # exits: west bridge = decoded trigger zone 0x20 (destination hand-picked: forest S400 for the demo);
 #   links to S202/S218 = hand-placed at the stairs nearest to their decoded trigger zones.
 spawn 1000 236
@@ -18,11 +21,9 @@ exit 574 625 16 8 S202 388 230
 exit 686 569 16 8 S202 500 172
 exit 713 220 16 8 S218 349 176
 exit 1128 294 16 8 S218 870 318
-npc talk P057AOAB 1088 288 1 "Guard" "Welcome to Asuka City, tamer.|The big hall behind me is closed for now."
 npc talk P047LEOM 555 474 7 "Leomon" "Train hard with your partner.|The forest lies past the west bridge."
 npc talk P046AW00 564 558 5 "Angewomon" "This plaza is the heart of Asuka City."
 npc talk P115KNIG 595 542 1 "Knightmon" "I keep the peace in this town.|No fighting inside the city walls!"
 npc talk P178NBEA 305 616 1 "Bearmon" "The park with the big tree is down the stairs."
 npc talk P109MTHI 719 235 7 "MetalTyrannomon" "The bridge behind me is off limits today."
-npc fight P171BAGM 196 770 6 "Black Agumon" 3
 walls original

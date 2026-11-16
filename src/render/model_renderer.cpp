@@ -1,5 +1,7 @@
 #include "render/model_renderer.h"
 
+#include "render/camera3d.h"
+
 #include <windows.h>
 #include <GL/gl.h>
 
@@ -188,6 +190,133 @@ void drawModel(const Model& m, const ModelGpu& gpu, const Pose& pose, const Mode
     glMatrixMode(GL_PROJECTION);
     glPopMatrix();
     glMatrixMode(GL_MODELVIEW);
+}
+
+void drawModelWorld(const Model& m, const ModelGpu& gpu, const Pose& pose, const Camera3D& cam, const WorldPlace& p) {
+    if (pose.size() != m.nodes.size()) return;
+    std::vector<Mat34> mats;
+    poseMatrices(m, pose, mats);
+    const float cyaw = std::cos(p.yaw), syaw = std::sin(p.yaw), s = p.scale;
+    // Same light as the 2D-era view: upper left, toward the camera, in view space (y down).
+    float lx = -0.45f, ly = -0.75f, lz = -0.5f;
+    const float ll = std::sqrt(lx * lx + ly * ly + lz * lz);
+    lx /= ll; ly /= ll; lz /= ll;
+    const float ta = float(p.tint >> 24) / 255.f;
+    const float tr = float(p.tint & 255) / 255.f, tg = float((p.tint >> 8) & 255) / 255.f, tb = float((p.tint >> 16) & 255) / 255.f;
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.5f);
+    if (p.silhouette) glDisable(GL_TEXTURE_2D);
+    else glEnable(GL_TEXTURE_2D);
+
+    struct V { float x, y, z; };
+    std::vector<V> pv, nv;
+    const int lastPass = p.flash > 0.f ? 2 : 1;
+    for (int pass = 0; pass <= lastPass; ++pass) {
+        if (pass < 2 && !(p.passes & (1 << pass))) continue;
+        if (pass == 0) { glDepthMask(GL_TRUE); glEnable(GL_ALPHA_TEST); }
+        if (pass == 1) { glDepthMask(GL_FALSE); glDisable(GL_ALPHA_TEST); }
+        if (pass == 2) {
+            glDepthMask(GL_FALSE);
+            glDisable(GL_TEXTURE_2D);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            glEnable(GL_ALPHA_TEST);
+        }
+        int boundTex = -1, boundBlend = -1;
+        for (size_t i = 0; i < m.nodes.size(); ++i) {
+            if (m.nodes[i].mesh < 0) continue;
+            const ModelMesh& mesh = m.meshes[size_t(m.nodes[i].mesh)];
+            const Mat34& M = mats[i];
+            pv.resize(mesh.verts.size());
+            for (size_t k = 0; k < mesh.verts.size(); ++k) {
+                float x, y, z;
+                xform(M, mesh.verts[k][0], mesh.verts[k][1], mesh.verts[k][2], x, y, z);
+                pv[k] = {p.x + (x * cyaw + z * syaw) * s, p.y + y * s, p.z + (-x * syaw + z * cyaw) * s};
+            }
+            nv.resize(mesh.norms.size());
+            if (p.shade)
+                for (size_t k = 0; k < mesh.norms.size(); ++k) {
+                    const auto& n = mesh.norms[k];
+                    const float x = M.m[0][0] * n[0] + M.m[0][1] * n[1] + M.m[0][2] * n[2];
+                    const float y = M.m[1][0] * n[0] + M.m[1][1] * n[1] + M.m[1][2] * n[2];
+                    const float z = M.m[2][0] * n[0] + M.m[2][1] * n[1] + M.m[2][2] * n[2];
+                    const float wx = x * cyaw + z * syaw, wz = -x * syaw + z * cyaw;
+                    // world -> view space (right, down, forward)
+                    const float vx = wx * cam.right[0] + y * cam.right[1] + wz * cam.right[2];
+                    const float vy = wx * cam.down[0] + y * cam.down[1] + wz * cam.down[2];
+                    const float vz = wx * cam.fwd[0] + y * cam.fwd[1] + wz * cam.fwd[2];
+                    const float l = std::max(1e-3f, std::sqrt(vx * vx + vy * vy + vz * vz));
+                    nv[k] = {vx / l, vy / l, vz / l};
+                }
+            for (const ModelPrim& pr : mesh.prims) {
+                const bool semi = pr.blend != 0 && !p.silhouette;
+                if ((pass == 0 && semi) || (pass == 1 && !semi)) continue;
+                if (pass == 1 && pr.blend != boundBlend) {
+                    boundBlend = pr.blend;
+                    if (pr.blend == 1) glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);  // average
+                    else if (pr.blend == 3) glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR);  // subtract (approx.)
+                    else glBlendFunc(GL_SRC_ALPHA, GL_ONE);                                 // add / add 1/4
+                }
+                if (pass < 2 && !p.silhouette && int(pr.clut) != boundTex && pr.clut < gpu.tex.size()) {
+                    glBindTexture(GL_TEXTURE_2D, gpu.tex[pr.clut].id);
+                    boundTex = pr.clut;
+                }
+                static const int kTri[2][3] = {{0, 1, 2}, {1, 3, 2}};
+                glBegin(GL_TRIANGLES);
+                for (int t = 0; t < (pr.count == 4 ? 2 : 1); ++t)
+                    for (int c = 0; c < 3; ++c) {
+                        const int k = kTri[t][c];
+                        if (pass == 2) {
+                            glColor4f(1, 1, 1, p.flash * ta);
+                        } else if (p.silhouette) {
+                            glColor4f(tr, tg, tb, ta);
+                        } else {
+                            float li = 1.f;
+                            if (pr.lit && p.shade && pr.n[k] < nv.size()) {
+                                const V& n = nv[pr.n[k]];
+                                li = 0.62f + 0.55f * std::max(0.f, -(n.x * lx + n.y * ly + n.z * lz));
+                            }
+                            const float cr = li * (pr.lit ? 1.f : pr.r / 128.f), cg = li * (pr.lit ? 1.f : pr.g / 128.f),
+                                        cb = li * (pr.lit ? 1.f : pr.b / 128.f);
+                            float a = ta;
+                            if (pass == 1) a *= pr.blend == 1 ? 0.5f : pr.blend == 4 ? 0.25f : 1.f;
+                            glColor4f(std::min(1.f, cr * tr), std::min(1.f, cg * tg), std::min(1.f, cb * tb), a);
+                            glTexCoord2f((pr.u[k] + 0.25f) / 256.f, (pr.t[k] + 0.25f) / 256.f);
+                        }
+                        const V& v = pv[pr.v[k]];
+                        glVertex3f(v.x, v.y, v.z);
+                    }
+                glEnd();
+            }
+        }
+    }
+    glDepthMask(GL_TRUE);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_TEXTURE_2D);
+    glColor4f(1, 1, 1, 1);
+}
+
+void drawGroundShadow3D(float x, float y, float z, float radius, float alpha) {
+    glDisable(GL_TEXTURE_2D);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-2.f, -4.f);
+    glBegin(GL_TRIANGLE_FAN);
+    glColor4f(0, 0, 0, alpha);
+    glVertex3f(x, y - 4.f, z);
+    glColor4f(0, 0, 0, 0);
+    for (int i = 0; i <= 24; ++i) {
+        const float a = float(i) / 24.f * 6.2831853f;
+        glVertex3f(x + std::cos(a) * radius, y - 4.f, z + std::sin(a) * radius);
+    }
+    glEnd();
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_TEXTURE_2D);
+    glColor4f(1, 1, 1, 1);
 }
 
 void drawGroundShadow(float cx, float cy, float rx, float ry, float alpha) {

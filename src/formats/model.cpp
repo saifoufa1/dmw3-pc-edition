@@ -191,12 +191,26 @@ Image Model::textureFor(size_t clutIndex) const {
         std::fill(img.px.begin(), img.px.end(), rgba(255, 255, 255));
         return img;
     }
-    const auto& vram = pages[page];
     const int cx = cluts[clutIndex][1], cy = cluts[clutIndex][2];
+    // The CLUT row normally sits in the texel page itself. Multi-page files (battle arenas
+    // DAT/EFFECT/MEFT10xx) keep it in another page and fill the texel page's slot with 0xFFFF:
+    // take the first page that holds a real palette there.
+    auto palWord = [&](size_t pg, int i) -> uint16_t {
+        const size_t idx = size_t(cy & 255) * 64 + size_t(cx + i);
+        return idx < pages[pg].size() ? pages[pg][idx] : 0;
+    };
+    auto blank = [&](size_t pg) {
+        for (int i = 0; i < 16; ++i)
+            if (palWord(pg, i) != 0xFFFF) return false;
+        return true;
+    };
+    size_t clutPage = page;
+    if (blank(page))
+        for (size_t pg = 0; pg < pages.size(); ++pg)
+            if (!blank(pg)) { clutPage = pg; break; }
     uint32_t pal[16];
     for (int i = 0; i < 16; ++i) {
-        size_t idx = size_t(cy & 255) * 64 + size_t(cx + i);
-        uint16_t w = idx < vram.size() ? vram[idx] : 0;
+        uint16_t w = palWord(clutPage, i);
         uint8_t r = uint8_t((w & 31) << 3), g = uint8_t(((w >> 5) & 31) << 3), b = uint8_t(((w >> 10) & 31) << 3);
         pal[i] = w == 0 ? 0 : rgba(uint8_t(r | r >> 5), uint8_t(g | g >> 5), uint8_t(b | b >> 5));
     }

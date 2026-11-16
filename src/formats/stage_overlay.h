@@ -10,7 +10,10 @@
 
 namespace dw3 {
 
-constexpr uint32_t kWstagBase = 0x800A4CA0;
+constexpr uint32_t kWstagBase = 0x800A4CA0;  // code entry (file offset 4)
+// Data pointers inside the overlay map to file offsets as (addr - kWstagData): verified by the actor
+// table, condition lists and talk tables (every pointer lands on a record start).
+constexpr uint32_t kWstagData = 0x800A4CA4;
 constexpr uint32_t kStageDesc = 0x800990B4;
 
 // Scene object (descriptor +0x10 table, 18-byte records): draws a TMPK piece at (x, y).
@@ -24,14 +27,29 @@ struct OverlayObject {
     uint16_t unk = 0;
 };
 
+// Story flag test or assignment: {u16 flag, u16 value} lists ended by flag 0xFFFF.
+struct FlagCond {
+    uint16_t flag = 0;
+    uint16_t value = 0;
+};
+
+// One talk table entry: if every `cond` holds, show TALK message `msg` and apply `set`.
+struct TalkEntry {
+    std::vector<FlagCond> cond, set;
+    uint32_t msg = 0;  // index into the area's TALK bank (DAT/COUNTRY/USA/USTALK##.BIN)
+};
+
 // Event actor (descriptor +0x4C pointer list, 20-byte records): a placed NPC for one story state.
+// FIELDSTG 0x8008A7CC: the actor is created only when its `show` list holds (0x80048288 callback).
 struct OverlayActor {
-    uint32_t condPtr = 0;   // condition/script pointer (RAM address; open)
-    uint16_t charId = 0;    // character id: (charId & 0xFF) = FIELD/SPRT P### number (bit 8 meaning open)
-    uint16_t slot = 0;      // actor slot; several records share a slot (one per story state)
-    int16_t x = 0, y = 0;   // map pixels (feet)
-    int16_t dir = 0;        // facing 0..7 (original order; see FORMATS.md)
-    uint32_t nextPtr = 0;
+    uint32_t showPtr = 0;   // +0x00 condition list for this variant to appear (0 = always)
+    uint32_t talkPtr = 0;   // +0x04 talk table: {condPtr, setPtr, msgId} triples, ended by 3 zeros
+    uint16_t charId = 0;    // +0x08 character id (NOT the P### sprite number; mapping is a FIELDSTG callback, open)
+    uint16_t slot = 0;      // +0x0A actor slot; several records share a slot (one per story state)
+    int16_t x = 0, y = 0;   // +0x0C/+0x0E map pixels (feet)
+    int16_t dir = 0;        // +0x10 facing 0..7 (original order; see FORMATS.md)
+    std::vector<FlagCond> show;
+    std::vector<TalkEntry> talk;
 };
 
 struct StageOverlay {

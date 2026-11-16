@@ -4,9 +4,23 @@ namespace dw3 {
 
 namespace {
 bool addrToOff(ByteView v, uint32_t addr, size_t n, size_t& off) {
-    if (addr < kWstagBase) return false;
-    off = addr - kWstagBase;
+    if (addr < kWstagData) return false;
+    off = addr - kWstagData;
     return v.has(off, n);
+}
+
+std::vector<FlagCond> readConds(ByteView v, uint32_t addr) {
+    std::vector<FlagCond> out;
+    size_t p;
+    if (!addr || !addrToOff(v, addr, 4, p)) return out;
+    for (int n = 0; n < 64 && v.has(p, 4); ++n, p += 4) {
+        FlagCond c;
+        v.u16(p, c.flag);
+        v.u16(p + 2, c.value);
+        if (c.flag == 0xFFFF) break;
+        out.push_back(c);
+    }
+    return out;
 }
 }  // namespace
 
@@ -48,9 +62,9 @@ bool loadStageOverlay(ByteView v, StageOverlay& out, std::string* err) {
         out.spawnY = int(out.desc[0x30 / 4] >> 8);
     }
 
-    // +0x10: scene objects, 18-byte records starting 4 bytes before the pointer, ended by type 0.
+    // +0x10: scene objects, 18-byte records, ended by type 0.
     size_t p;
-    if (out.has[0x10 / 4] && out.desc[0x10 / 4] && addrToOff(v, out.desc[0x10 / 4] - 4, 18, p)) {
+    if (out.has[0x10 / 4] && out.desc[0x10 / 4] && addrToOff(v, out.desc[0x10 / 4], 18, p)) {
         for (int n = 0; n < 1024 && v.has(p, 18) && v.data[p] != 0; ++n, p += 18) {
             OverlayObject o;
             uint16_t a, b, c, x, y;
@@ -74,9 +88,23 @@ bool loadStageOverlay(ByteView v, StageOverlay& out, std::string* err) {
             if (!v.u32(p, ptr) || ptr == 0 || !addrToOff(v, ptr, 20, r)) break;
             OverlayActor a;
             uint16_t x, y, d;
-            v.u32(r, a.condPtr); v.u16(r + 4, a.charId); v.u16(r + 6, a.slot);
-            v.u16(r + 8, x); v.u16(r + 10, y); v.u16(r + 12, d); v.u32(r + 16, a.nextPtr);
+            v.u32(r, a.showPtr); v.u32(r + 4, a.talkPtr); v.u16(r + 8, a.charId); v.u16(r + 10, a.slot);
+            v.u16(r + 12, x); v.u16(r + 14, y); v.u16(r + 16, d);
             a.x = int16_t(x); a.y = int16_t(y); a.dir = int16_t(d);
+            a.show = readConds(v, a.showPtr);
+            size_t t;
+            if (a.talkPtr && addrToOff(v, a.talkPtr, 12, t)) {
+                for (int k = 0; k < 64 && v.has(t, 12); ++k, t += 12) {
+                    uint32_t c, st, m;
+                    v.u32(t, c); v.u32(t + 4, st); v.u32(t + 8, m);
+                    if (!c && !st && !m) break;
+                    TalkEntry e;
+                    e.cond = readConds(v, c);
+                    e.set = readConds(v, st);
+                    e.msg = m;
+                    a.talk.push_back(std::move(e));
+                }
+            }
             out.actors.push_back(a);
         }
     }

@@ -19,7 +19,9 @@ dumps/
 
 # Build artifacts
 /build/
+/build-ui/
 /build-city/
+/build-story/
 /dist/
 /out/
 .vs/

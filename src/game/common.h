@@ -21,6 +21,9 @@ struct Input {
     bool keyP[256] = {};
     float mx = -1, my = -1;  // mouse in virtual 320x240 screen coords
     bool lmb = false, rmb = false, lmbP = false, rmbP = false, lmbR = false;
+    // 3D battle camera: gamepad right stick (-1..1, x = turn, y = tilt) and mouse wheel notches.
+    float camTurn = 0, camTilt = 0;
+    int wheel = 0;
 };
 
 // 8 facings in screen space. Stored sprites cover S..N; the W side is drawn mirrored.
