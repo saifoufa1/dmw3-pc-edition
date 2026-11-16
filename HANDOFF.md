@@ -1,0 +1,67 @@
+# Handoff — read this first (for any AI assistant or developer continuing the project)
+
+DMW3 PC Edition is a from-scratch C++17 PC engine for **Digimon World 3 (PS1)**. It reads the player's **own**
+extracted disc data at runtime and re-implements the game with the owner's design changes.
+
+## Hard rules (never break)
+1. **Never commit game data** or anything extracted from it: no `.BIN/.PRO/.STR`, no dumped images, audio,
+   fonts or text. The repo contains only code, our own data files (`data/`), and format documentation.
+   `.gitignore` blocks the common cases, but check `git status` before every commit.
+2. `build\dw3check.exe` must print `OK (0 failures)` after every parser change.
+3. Every decoded format goes into `docs/FORMATS.md` (offsets, confidence, open questions).
+4. Owner design decisions are listed in `docs/ROADMAP.md` ("Design decisions") — keep them:
+   no random encounters (NPCs placed on the map, touch to fight), real-time DW1-style battles with direct
+   attack buttons, the player decides when to digivolve, digivolution lasts the whole battle,
+   held items are a separate future project.
+5. Developer tools (F3 size dashboard, `--dev`, test flags) must never appear for normal players.
+
+## Build & run (Windows, Visual Studio 2022/2026 with the C++ workload)
+```
+build.bat                         # -> build\dmw3.exe, build\dw3check.exe (CMake + Ninja + MSVC)
+build\dw3check.exe                # corpus check over the whole disc data: must end with OK (0 failures)
+build\dmw3.exe                    # the game (finds game data by walking up from the exe, or --data PATH / DW3_DATA)
+```
+Game data layout expected: `<root>/DAT`, `<root>/PRO`, `<root>/STR` (the owner keeps it in `C:\DW3_Project\game_data`).
+
+Useful flags (see `src/platform/win32_main.cpp`):
+- `--battle`, `--form 0..3`, `--boss SPRITE`, `--arena N`, `--cam-yaw DEG`, `--dv` — jump into a fight
+- `--new-game`, `--no-story`, `--story-event NAME`, `--pos X Y`, `--stage S200` — field / story tests
+- `--frames N --screenshot out.bmp` (+ `--attack 1..3`, `--confirm-at F`, `--confirm-every N`) — headless screenshot tests
+- `--ui-preview hud|result|levelup|window|font|sheets` — original UI component preview
+- `--dev` (F3 size dashboard in battle), `--sizes` (opens it) — developer only
+- dw3check: `--dump-model ID out.bmp`, `--dump-arena N out.bmp`, `--dump-ui SHEET out.bmp`, `--dump-text DMG200`
+  (dump output goes to a scratch folder, never into the repo)
+
+## Code map
+| Path | What |
+|---|---|
+| `src/core` | file IO, data-root discovery |
+| `src/formats` | pure parsers: sprites, field stage (MASK/TMPK), stage overlay (WSTAG), 3D model (DAT/MODEL), arena (MEFT1001-1055), text (USA encoding), UI sheets (*CS/*TM) |
+| `src/render` | OpenGL 1.1 renderer, model renderer, 3D camera |
+| `src/ui` | ORIGINAL UI drawn from game data: font, windows, battle HUD, fight report (EXP / level up) |
+| `src/game` | game modes: field, battle (3D arena, real-time), story + dialogue, common types |
+| `data/stages/*.stage` | our stage files (walls, exits, NPCs) — editable in game with F2 |
+| `data/story/chapter1.story` | our story script (references original message ids; no game text) |
+| `data/battle_sizes.cfg` | battle sizes (Agumon 0.6, Greymon 1.5, MetalGreymon 2.1, WarGreymon 2.6) |
+| `tools/dw3check.cpp` | corpus checker + dump tools |
+| `docs/FORMATS.md` | every decoded PS1 format |
+| `docs/ROADMAP.md` | milestones, owner design decisions, story status |
+
+## State (2026-11-16)
+Working: Asuka City field maps with original pieces/walk maps/NPC positions; chapter 1 story with original
+dialogue; real-time 3D battles in the original arenas (free movement, orbit camera Q/E / right-drag / wheel);
+Agumon line (Agumon/Greymon/MetalGreymon/WarGreymon) as original 3D models with their attack effects;
+digivolution sequences (partner and enemy: Black Agumon -> BlackGreymon); original battle HUD, dialogue
+window/font and post-battle EXP/BIT/level-up screen.
+
+## Next steps (owner priorities, in order)
+1. Draw the game as the original: original menus (status, items, Digimon), original positions of the HUD
+   (layout code in `PRO/FIGHTSTG.PRO`, `PRO/STFGTREP.PRO` not decoded yet — current layout is reconstructed).
+2. Exit/door destinations (lobby interior, Digimon Lab, shops) so the opening plays in the original rooms.
+3. WSTAG charId -> sprite map (NPCs still use hand-placed sprites), original stage -> arena table.
+4. Chapter 2 of the story; enemies' original parties.
+5. Audio (SPU ADPCM banks + sequenced BGM).
+
+## Workflow with the owner
+The owner says "update github" to publish: commit the new work and push to
+`https://github.com/saifoufa1/dmw3-pc-edition` (public). Commit identity is the owner's GitHub noreply address.

@@ -1,5 +1,7 @@
 # Digimon World 3 — PC Edition (fan engine)
 
+> **Continuing this project (human or AI)? Read [HANDOFF.md](HANDOFF.md) first.**
+
 A native C++ engine that runs **Digimon World 3** (PlayStation, 2002) on PC by reading the data from **your own copy** of the game. No emulator: the file formats are reverse-engineered and reimplemented in C++.
 
 > ⚠️ This repository contains **no game assets**. You must own the original disc and extract its files yourself. Digimon is a trademark of Bandai Namco; this is an unofficial, non-commercial fan project.
