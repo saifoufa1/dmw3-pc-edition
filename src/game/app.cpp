@@ -351,7 +351,7 @@ void App::updateMenu(const Input& in) {
     const int n = int(menuItems_.size());
     if (in.up && !prevUp_) menuSel_ = (menuSel_ + n - 1) % n;
     if (in.down && !prevDown_) menuSel_ = (menuSel_ + 1) % n;
-    if (in.keyP[kVkEscape]) { go(State::Title); return; }
+    if (in.keyP[kVkEscape] || in.keyP[kVkBack]) { go(State::Title); return; }
     if (!(in.confirmP || in.keyP[kVkReturn]) || stateTicks_ < 5) return;
     error_.clear();
     switch (menuItems_[size_t(menuSel_)]) {
@@ -369,7 +369,7 @@ void App::updateSlots(const Input& in) {
     const bool ok = stateTicks_ > 5 && (in.confirmP || in.keyP[kVkReturn]);
     if (overwriteAsk_) {
         if ((in.left && !prevLeft_) || (in.right && !prevRight_) || (in.up && !prevUp_) || (in.down && !prevDown_)) yes_ = !yes_;
-        if (in.keyP[kVkEscape] || (ok && !yes_)) { overwriteAsk_ = false; return; }
+        if ((in.keyP[kVkEscape] || in.keyP[kVkBack]) || (ok && !yes_)) { overwriteAsk_ = false; return; }
         if (ok && yes_) {
             std::error_code ec;
             fs::remove_all(slotDir(slotSel_), ec);  // the old account + save of this slot
@@ -387,7 +387,7 @@ void App::updateSlots(const Input& in) {
     };
     if (in.up && !prevUp_) step(-1);
     if (in.down && !prevDown_) step(1);
-    if (in.keyP[kVkEscape]) { go(State::MainMenu); return; }
+    if (in.keyP[kVkEscape] || in.keyP[kVkBack]) { go(State::MainMenu); return; }
     if (!ok) return;
     const SlotInfo& si = slots_[size_t(slotSel_)];
     if (slotsForNew_) {
@@ -407,7 +407,7 @@ void App::updateOptions(const Input& in) {
     if (optSel_ == 0 && (ok || (in.left && !prevLeft_) || (in.right && !prevRight_))) {
         fullscreen_ = !fullscreen_;
         saveOptions();
-    } else if ((optSel_ == 1 && ok) || in.keyP[kVkEscape]) {
+    } else if ((optSel_ == 1 && ok) || (in.keyP[kVkEscape] || in.keyP[kVkBack])) {
         go(State::MainMenu);
     }
 }
@@ -453,7 +453,7 @@ void App::updateSignUp(const Input& in) {
 
     bool submit = in.keyP[kVkReturn];
     // Grid select: gamepad confirm (Space/Enter on the keyboard type/submit instead).
-    if (in.confirmP && !in.keyP[kVkSpace] && !in.keyP[kVkReturn]) {
+    if (in.confirmP && !in.keyP[kVkSpace] && !in.keyP[kVkReturn] && !in.keyP['U']) {
         if (gridY_ == kGridRowsN - 1 && gridX_ == 11) { if (!f.empty()) f.pop_back(); }
         else if (gridY_ == kGridRowsN - 1 && gridX_ == 12) submit = true;
         else if (f.size() < maxLen) f += kGridRows[gridY_][gridX_];
@@ -485,7 +485,7 @@ void App::updatePack(const Input& in) {
     if (confirm_) {  // "Register account? YES / NO"
         if ((in.left && !prevLeft_) || (in.right && !prevRight_) || (in.up && !prevUp_) || (in.down && !prevDown_))
             yes_ = !yes_;
-        if (in.keyP[kVkEscape]) { confirm_ = false; return; }
+        if (in.keyP[kVkEscape] || in.keyP[kVkBack]) { confirm_ = false; return; }
         if (ok || (flow_.stopAt == "newgame" && stateTicks_ == 50)) {
             confirm_ = false;
             if (yes_ || flow_.stopAt == "newgame") { doneTicks_ = kDoneTicks; termStart_ = ticks_; }
@@ -495,7 +495,7 @@ void App::updatePack(const Input& in) {
     // Original layout: the A/B/C tabs on the left are chosen with up/down (left/right also work).
     if ((in.up && !prevUp_) || (in.left && !prevLeft_)) packSel_ = (packSel_ + n - 1) % n;
     if ((in.down && !prevDown_) || (in.right && !prevRight_)) packSel_ = (packSel_ + 1) % n;
-    if (in.keyP[kVkEscape]) { go(State::MainMenu); return; }
+    if (in.keyP[kVkEscape] || in.keyP[kVkBack]) { go(State::MainMenu); return; }
     if (ok) {
         confirm_ = true;
         yes_ = true;
@@ -512,7 +512,7 @@ void App::updateLogIn(const Input& in) {
 
 void App::updatePause(const Input& in) {
     if (pauseMsgTicks_ > 0) --pauseMsgTicks_;
-    if (in.keyP[kVkEscape]) { go(State::Playing); return; }
+    if (in.keyP[kVkEscape] || in.keyP[kVkBack]) { go(State::Playing); return; }
     if (in.up && !prevUp_) pauseSel_ = (pauseSel_ + 3) % 4;
     if (in.down && !prevDown_) pauseSel_ = (pauseSel_ + 1) % 4;
     if (!(in.confirmP || in.keyP[kVkReturn])) return;
@@ -675,7 +675,7 @@ void App::renderSlots() {
         ui::drawTextFit(x + 40, y + 30, si.lead, style::kSlotW - 50, sel ? style::kGreenText : main);
     }
     const float hy = style::kSlotTop + (style::kSlotH + style::kSlotGap) * float(style::kSlotCount) + 2;
-    ui::drawTextFit(x + 4, hy, "Up/Down: choose  Confirm: OK  Esc: back", style::kSlotW - 8, style::kTermText);
+    ui::drawTextFit(x + 4, hy, "Up/Down: choose  U/Enter: OK  Esc/Backspace: back", style::kSlotW - 8, style::kTermText);
     if (overwriteAsk_) {
         const float wy = 92;
         ui::fillRect(0, 0, kScreenW, kScreenH, 0x80000000u);

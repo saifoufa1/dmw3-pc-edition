@@ -20,25 +20,24 @@ Backspace) = back; (5) door transition + teleport port animation; (6) topmost te
 
 **Why it was wrong:** NPC sprites used `charId & 0xFF` as the `P###` number (wrong: charId indexes a FIELDSTG table
 of file ids), extra story NPCs were hand-placed on top, and every door target was hand-picked (the lobby's lower-right
-walkway really leads to S220, not S200). The original data has all of it: see docs/FORMATS.md "Area link table",
-"FIELDSTG.PRO tables", "File ids".
+walkway really leads to S220, the west corridor to the Central Sector S200). The original data has all of it: see
+docs/FORMATS.md "Area link table", "FIELDSTG.PRO tables", "File ids".
 
 **Done**
-- Extraction (commit `COMMIT1`): `dw3check --dump-npcs S210`, `--extract-npcs data`, `--map-file-ids`;
+- Extraction (`3c12ebf`): `dw3check --dump-npcs S210`, `--extract-npcs data`, `--map-file-ids`;
   `data/file_ids.cfg` (names only, committed); `data/npcs/S###.npc` + `data/doors/S###.door` are generated from the
   player's own game data by `build.bat` (git-ignored, never pushed). dw3check checks every warp target exists.
+- Keys (`KEYS`): U added to `confirm` (win32_main.cpp `poll`), Backspace = back in the app.cpp menus, hint texts.
 
 **Half-done (in the working tree of the field agent, not committed yet)**
-- `src/game/field.cpp/.h`: NPCs only from data/npcs, doors from data/doors via trigger zones, arrow bubble, U/Enter
-  door use, door sequence (door opens -> tile wipe -> area card), ports (`data/ports.cfg`), `Field::doorSelfTest`
-  run by `dmw3 --door-test OUT.txt`. Builds; not yet tested in game.
-- `data/story/chapter1.story`: still has the hand actors (service/teddy/kail/genji) — must switch to
-  `actor ID STAGE talk slot N "Name"` (new syntax in story.cpp) and `gset 6002 0` when 6004 is set.
-- Keys: U added to confirm (win32_main.cpp poll), Backspace = back in app.cpp menus, hint texts.
+- `src/game/field.cpp/.h`: NPCs only from data/npcs, doors from data/doors via trigger zones, arrow bubble
+  (`Field::playerDoor`), U/Enter door use, door sequence (door opens -> tile wipe -> area card), ports
+  (`data/ports.cfg`), `Field::doorSelfTest` run by `dmw3 --door-test OUT.txt` (passes: 16 PASS, 1 SKIP = S235 has
+  no decoded trigger map). `data/story/chapter1.story` uses the original slots (`actor ... slot N`).
+  Tested so far: lobby arrival without partners + arrow, Tamer Service talk behind the counter -> download prompt.
 
-**Next step:** run `build\dmw3.exe --door-test out.txt` (Field::doorSelfTest in src/game/field.cpp), fix
-failures; then edit data/story/chapter1.story (actors -> original slots: S210 slot 4 = Tamer Service char 32 at
-384,255; S200 Genji = char 57 at 1088,288), then screenshots into C:\DW3_Project\reference\pc\round2\.
+**Next step:** commit the field work; then screenshots (download, each door both ways, port, Genji, battle) into
+C:\DW3_Project\reference\pc\round2\ with `--flow newgame --select-set 1 --flow-pos X Y --confirm-at F`.
 
 ### Graphics/controls work — on `gfx-round2`
 1. **Fit any screen:** resizable window, borderless fullscreen, and Fit / Stretch / Integer scale modes; wide screens show more of the scene. Saved in options.cfg.

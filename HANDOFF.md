@@ -32,6 +32,11 @@ scratch folder, and delete it afterwards, so no test save lands in `%APPDATA%\DM
 `--confirm-every N --confirm-from FRAME`, e.g.
 `build\dmw3.exe --save-dir %TEMP%\dmw3t --flow newgame --account Tamer --select-set 2 --flow-event download --confirm-every 12 --confirm-from 240 --frames 1500 --screenshot lobby.bmp`.
 
+### Controls (owner decision 2026-11-16)
+**U or Enter** = talk / use a door / confirm, everywhere (Space still works too). **Esc** = cancel / back / pause;
+**Backspace** = back in the menus (not on the sign-up screen, where it deletes letters). Battle: U = digivolve.
+Input mapping: `poll()` in `src/platform/win32_main.cpp` (`confirm`), menus in `src/game/app.cpp`.
+
 ### Battle EXP rule (owner decision 2026-11-16, `Battle::startResult`)
 Each Digimon of the team has its own level, EXP and stats. After a won battle the Digimon that fought gets the
 full EXP; the other team members get half of it (rounded down) from the bench. Each one levels up on its own

@@ -76,7 +76,7 @@ Held poll(HWND hwnd, bool focused) {
         h.left = k(VK_LEFT) || k('A');
         h.right = k(VK_RIGHT) || k('D');
         h.run = k(VK_SHIFT);
-        h.confirm = k(VK_SPACE) || k(VK_RETURN);
+        h.confirm = k(VK_SPACE) || k(VK_RETURN) || k('U');  // U / Enter = confirm, talk, doors (Space kept)
         h.atk1 = k('J') || k('1');
         h.atk2 = k('K') || k('2');
         h.atk3 = k('L') || k('3');

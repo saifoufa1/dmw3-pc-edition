@@ -1252,7 +1252,7 @@ void Battle::renderHud(int ww, int wh) {
     if (phase_ != Phase::Fight) {
         gfx::toWindow(160, 100, x, y);
         gfx::drawTextCentered(x, y, banner_.c_str(), won_ || phase_ == Phase::Intro ? 0xff40ffffu : 0xff4040ffu);
-        if (phase_ == Phase::Ending && phaseTimer_ < 100) gfx::drawTextCentered(x, y + 24, "[Space] continue", 0xffffffffu);
+        if (phase_ == Phase::Ending && phaseTimer_ < 100) gfx::drawTextCentered(x, y + 24, "[Enter] continue", 0xffffffffu);
     }
     if (sizePanel_) renderSizePanel();
     (void)ww;

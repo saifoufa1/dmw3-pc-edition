@@ -710,7 +710,7 @@ void Story::renderHud(int ww, int wh) {
         }
         gfx::fillRect(float(ww / 2 - 160), float(wh / 2 - 46), 320.f, 2.f, rgba(90, 160, 255));
         gfx::fillRect(float(ww / 2 - 160), float(cy - 6), 320.f, 2.f, rgba(90, 160, 255));
-        if ((ticks_ / 30) % 2 == 0) gfx::drawTextCentered(ww / 2, cy + 40, "Press Space", rgba(150, 190, 255));
+        if ((ticks_ / 30) % 2 == 0) gfx::drawTextCentered(ww / 2, cy + 40, "Press U / Enter", rgba(150, 190, 255));
     }
     if (wait_ == Wait::Partner) {
         gfx::drawTextCentered(ww / 2, wh / 6, "Choose your partner Digimon", rgba(255, 230, 140));
@@ -720,7 +720,7 @@ void Story::renderHud(int ww, int wh) {
             gfx::toWindow(kScreenW * (i + 1) / float(n + 1), 150, x, y);
             gfx::drawTextCentered(x, y, starters_[size_t(i)].name.c_str(), i == partnerSel_ ? rgba(255, 230, 90) : rgba(170, 170, 170));
         }
-        gfx::drawTextCentered(ww / 2, wh - wh / 6, "Left/Right: choose   Space: confirm", rgba(150, 190, 255));
+        gfx::drawTextCentered(ww / 2, wh - wh / 6, "Left/Right: choose   U/Enter: confirm", rgba(150, 190, 255));
     }
     dlg_.renderHud(ww, wh);
     if (errorTimer_ > 0) gfx::drawText(10, wh - 32, errorText_.c_str(), rgba(255, 90, 90));

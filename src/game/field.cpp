@@ -845,7 +845,7 @@ void Field::renderHud(int ww, int wh) {
         if (n.def.kind == NpcKind::Boss) gfx::drawTextCentered(wx, wy, ("BOSS " + n.def.name).c_str(), 0xff4040ffu);
         else if (n.def.kind == NpcKind::Fight) gfx::drawTextCentered(wx, wy, ("! " + n.def.name).c_str(), 0xff40a0ffu);
         else if (editor_ || dist(player_.x, player_.y, n.actor.x, n.actor.y) < kTalkRange * 1.6f)
-            gfx::drawTextCentered(wx, wy, editor_ ? n.def.name.c_str() : "[Space] Talk", 0xffffffffu);
+            gfx::drawTextCentered(wx, wy, editor_ ? n.def.name.c_str() : "[U] Talk", 0xffffffffu);
     }
     if (editor_)
         for (const auto& e : data_.exits) {
@@ -856,8 +856,8 @@ void Field::renderHud(int ww, int wh) {
 
     if (hud_ && !cine && !dev_) {
         gfx::drawText(10, wh - 12,
-                      party_.team.size() > 1 && party_.partnersOut ? "Move: WASD/Arrows  Run: Shift  Talk: Space  Partner: Tab  Menu: Esc  HUD: F1"
-                                             : "Move: WASD/Arrows  Run: Shift  Talk: Space  Menu: Esc  HUD: F1",
+                      party_.team.size() > 1 && party_.partnersOut ? "Move: WASD/Arrows  Run: Shift  Talk: U or Enter  Partner: Tab  Menu: Esc  HUD: F1"
+                                             : "Move: WASD/Arrows  Run: Shift  Talk: U or Enter  Menu: Esc  HUD: F1",
                       0xffb0e0ffu);
     }
     if (hud_ && !cine && dev_) {
@@ -867,7 +867,7 @@ void Field::renderHud(int ww, int wh) {
         gfx::drawText(10, 20, line);
         if (!editor_)
             gfx::drawText(10, wh - 12,
-                          "Move: WASD/Arrows  Run: Shift  Talk: Space  Stage: PgUp/PgDn  Editor: F2  HUD: F1",
+                          "Move: WASD/Arrows  Run: Shift  Talk: U or Enter  Stage: PgUp/PgDn  Editor: F2  HUD: F1",
                           0xffb0e0ffu);
     }
     if (editor_) {
@@ -891,7 +891,7 @@ void Field::renderHud(int ww, int wh) {
         gfx::drawText(x, y + 12, npcs_[talkNpc_].def.name.c_str(), 0xff40d0ffu);
         gfx::drawText(x, y + 12 + 22, talkPages_[talkPage_].c_str(), 0xffffffffu);
         gfx::toWindow(250, 222, x, y);
-        gfx::drawText(x, y, talkPage_ + 1 < talkPages_.size() ? "[Space] >" : "[Space] close", 0xffb0e0ffu);
+        gfx::drawText(x, y, talkPage_ + 1 < talkPages_.size() ? "[U] >" : "[U] close", 0xffb0e0ffu);
     }
 }
 
