@@ -26,6 +26,7 @@ struct NpcDef {
     std::string name;
     int level = 1;       // fight/boss strength
     std::string text;    // talk line(s); '|' separates pages
+    bool original = false;  // placed from the original event actors ("npcs original"), never saved
 };
 
 struct ItemDef {
@@ -43,6 +44,7 @@ struct StageData {
     bool fromFile = false;
     bool hasWallGrid = false;    // the file had a "walls" grid
     bool originalWalls = false;  // "walls original": build walls from the game's own walk map (TMPK)
+    bool originalNpcs = false;   // "npcs original": also show the original event actors (WSTAG) as NPCs
 
     void resize(int mapW, int mapH);
     bool isWall(int px, int py) const;  // outside the grid counts as wall

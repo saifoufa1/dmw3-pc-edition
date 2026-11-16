@@ -125,6 +125,9 @@ void Field::addOriginalNpcs() {
         const OverlayActor* a = first[slot * 1000 + best];
         const size_t num = size_t(a->charId & 0xFF);
         if (num >= spriteByNumber_.size() || spriteByNumber_[num].empty()) continue;
+        bool taken = false;  // a hand-placed NPC of the .stage file already stands here
+        for (const auto& o : data_.npcs) taken = taken || (std::abs(o.x - a->x) < 8 && std::abs(o.y - a->y) < 8);
+        if (taken) continue;
         NpcDef d;
         d.kind = NpcKind::Talk;
         d.sprite = spriteByNumber_[num];
@@ -133,6 +136,7 @@ void Field::addOriginalNpcs() {
         d.dir = a->dir & 7;
         d.name = d.sprite.substr(4);
         d.text = "(Original NPC position. Dialogue not decoded yet.)";
+        d.original = true;
         data_.npcs.push_back(d);
     }
 }
@@ -204,6 +208,7 @@ bool Field::loadStage(size_t index, std::string& err, int arriveX, int arriveY) 
             if (haveFile) { data_.exits = keep.exits; data_.npcs = keep.npcs; data_.items = keep.items; data_.spawnX = keep.spawnX; data_.spawnY = keep.spawnY; }
         }
     }
+    if (haveFile && data_.originalNpcs) addOriginalNpcs();
     if (!haveFile) {
         addOriginalNpcs();
         if (overlay_.spawnX >= 0 && fstage_.walkAt(overlay_.spawnX, overlay_.spawnY)) { data_.spawnX = overlay_.spawnX; data_.spawnY = overlay_.spawnY; }

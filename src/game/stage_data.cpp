@@ -106,6 +106,7 @@ bool loadStageData(const std::filesystem::path& p, StageData& d, std::string& er
             d.npcs.push_back(n);
         } else if (k == "item" && t.size() >= 4) d.items.push_back({t[1], toInt(t, 2, 0), toInt(t, 3, 0)});
         else if (k == "walls" && t.size() > 1 && t[1] == "original") d.originalWalls = true;
+        else if (k == "npcs" && t.size() > 1 && t[1] == "original") d.originalNpcs = true;
         else if (k == "walls") { wallRow = 0; d.hasWallGrid = true; }
     }
     d.fromFile = true;
@@ -123,6 +124,7 @@ bool saveStageData(const std::filesystem::path& p, const StageData& d) {
     f << "# npc   fight|boss SPRITE x y dir \"Name\" level\n";
     f << "# item  sword x y\n";
     f << "# walls original = walls from the game's own walk map (DAT/FIELD/STAGE/S###TMPK.BIN)\n";
+    f << "# npcs original  = also place the original event actors (PRO/WSTAG###.PRO) as NPCs\n";
     f << "cell " << d.cell << "\nsize " << d.cols << ' ' << d.rows << "\n";
     if (d.spawnX >= 0) f << "spawn " << d.spawnX << ' ' << d.spawnY << "\n";
     for (auto& e : d.exits) {
@@ -131,12 +133,14 @@ bool saveStageData(const std::filesystem::path& p, const StageData& d) {
         f << "\n";
     }
     for (auto& n : d.npcs) {
+        if (n.original) continue;  // re-added from WSTAG by "npcs original"
         f << "npc " << npcKindName(n.kind) << ' ' << n.sprite << ' ' << n.x << ' ' << n.y << ' ' << n.dir << " \""
           << n.name << "\" ";
         if (n.kind == NpcKind::Talk) f << '"' << n.text << "\"\n";
         else f << n.level << "\n";
     }
     for (auto& it : d.items) f << "item " << it.id << ' ' << it.x << ' ' << it.y << "\n";
+    if (d.originalNpcs) f << "npcs original\n";
     if (d.originalWalls) {  // walls are rebuilt from the game's walk map (TMPK) at load time
         f << "walls original\n";
         return bool(f);

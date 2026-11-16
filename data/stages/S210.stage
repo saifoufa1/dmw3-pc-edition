@@ -2,18 +2,25 @@
 # exit  x y w h TARGET [arriveX arriveY]
 # npc   talk  SPRITE x y dir "Name" "Line one|Line two"
 # walls original = walls from the game's own walk map (DAT/FIELD/STAGE/S###TMPK.BIN)
+# npcs original  = also place the original event actors (PRO/WSTAG###.PRO) as NPCs
 #
-# ASUKA CITY MAIN LOBBY (S210) - where a new PC Edition game starts (reference shot 38: the player arrives on the
+# ASUKA CITY / MAIN LOBBY (S210) - where a new PC Edition game starts (reference shot 38: the player arrives on the
 # right platform from the Login Room door, decoded trigger zone 0xA2 at 720,359).
 # spawn: in front of that door (the decoded WSTAG spawn 284,308 is the centre emblem used by the opening).
-# exits: decoded trigger zones 0x20 (west corridor) and 0xE1 (south-east corridor). Their targets are hand-picked:
-#   both lead out to Asuka City S200, arriving below the lobby door (S200 trigger 0xA5 at 976,200).
-#   Doors 0xA2/0xA3/0xA4/0x65 (Login Room, side rooms) are not linked yet: their interiors are unknown.
-# npcs: on the decoded event actor spots, so talking shows the ORIGINAL lines from your disc
-#   (WSTAG210 talk table: Tamer Service "hints" counter + Guide "Digimon Online Help Counter").
+# doors = decoded trigger zones, destinations from the reference playthrough (reference/NOTES.md, shots 37-53):
+#   0xA2 (720,359) start-spot door by the teal grid screen -> Asuka City / Login Room       S225 (shot 51)
+#   0xA3 (496,263) door right of the Tamer Service counter  -> Asuka City / Arena Front Desk S230 (shots 41, 52-53)
+#   0xE1 (704,584) lower-right walkway                       -> Asuka City / Central Sector  S200 (shots 39, 48),
+#        arriving at the dragon gate (S200 zone 0xA5, where Tamer Genji waits). Blocked until the player has
+#        partners (zones 0x07/0x09, "Oh yeah! I need my partner Digimon data!"): see data/story/chapter1.story.
+#   0x20 (56,392) west corridor: destination unknown (not in the reference run); leads to Central Sector for now.
+#   0xA4 (320,175) door left of the counter, 0x65 (168,136) upper-left platform: destinations unknown, not linked.
+# npcs: the original event actors (WSTAG210); talking shows the ORIGINAL lines from your disc
+#   (Tamer Service "hints" counter, Guide "Digimon Online Help Counter", Maniac Phillip, ...).
 spawn 735 398
-exit 56 392 57 33 S200 1010 262
+exit 720 359 50 26 S225 115 445
+exit 496 263 50 26 S230 125 305
 exit 704 584 40 25 S200 1010 262
-npc talk P044OPFS 384 255 1 "Tamer Service" "Welcome."
-npc talk P043OPMA 434 247 7 "Guide" "This is the Help Counter."
+exit 56 392 57 33 S200 1010 262
+npcs original
 walls original

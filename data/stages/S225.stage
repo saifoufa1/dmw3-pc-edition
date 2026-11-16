@@ -1,0 +1,14 @@
+# DMW3 PC Edition stage data v1 (edit in-game with F2 + --dev, or by hand)
+# exit  x y w h TARGET [arriveX arriveY]
+# walls original = walls from the game's own walk map (DAT/FIELD/STAGE/S###TMPK.BIN)
+# npcs original  = also place the original event actors (PRO/WSTAG###.PRO) as NPCs
+#
+# ASUKA CITY / LOGIN ROOM (S225; S226 = same room in red). Reference shots 33-36 and 51: login pads, the clerk who
+# says to retrieve your Digimon at the Main Lobby. The only exit is the walkway at the bottom left
+# (decoded trigger zone 0x20 at 48,456) -> Main Lobby S210, arriving in front of its Login Room door (zone 0xA2).
+# spawn: arriving from the lobby, on the walkway next to that exit (shot 51). The decoded WSTAG spawn 253,375 is the
+# login pad the opening uses.
+spawn 115 445
+exit 48 456 49 25 S210 735 398
+npcs original
+walls original
