@@ -30,7 +30,7 @@ Worktree `C:\DW3_Project\dmw3-gfx`. Owner of this section: the graphics agent (t
 
 **Done**
 - `0005e09` Black gaps in field stages: Z_STAGE chunks have a 3rd rect list (low floor); now decoded (`src/formats/stage_pack.cpp`).
-- (this commit) Render pipeline in `src/render/gl_renderer.*`: scene drawn into an FBO at virtual size x integer scale R,
+- `d38878b` Render pipeline in `src/render/gl_renderer.*`: scene drawn into an FBO at virtual size x integer scale R,
   composed onto the window with Fit / Stretch / Integer, sharp-bilinear or nearest, optional MSAA (battle 3D) and CRT
   filter; HUD text queued and drawn in real window pixels by `gfx::endFrame()`. Wide windows: field + battle show more
   horizontally (`gfx::viewLeft()/viewRight()`, x 0..320 stays the centred 4:3 area). DPI aware window, F11 fullscreen.
@@ -44,9 +44,16 @@ Worktree `C:\DW3_Project\dmw3-gfx`. Owner of this section: the graphics agent (t
   (`gfx::setOffscreenPresent`, `gfx::readFrame`). Test flags: `--window W H --scale fit|stretch|integer --no-wide
   --lowres --nearest --msaa N --crt --password TEXT --mouse X Y --click-at FRAME`.
 
+- Screenshots checked at 1280x720, 1920x1080, 2560x1080, 1366x768 (title, sign-up, pack, lobby, battle, plus options,
+  pause, CRT, integer, stretch, hover, click-to-walk, battle click) in `C:\DW3_Project\reference\pc\round2_gfx\`
+  (owner's PC only). Black gaps before/after: `gaps_before_S210_960x720.png` / `gaps_after_S210_960x720.png`.
+
 **Half-done / next step**
-- Verify screenshots at 1280x720, 1920x1080, 2560x1080/1366x768 (title, sign-up, pack, lobby, battle) into
-  `C:\DW3_Project\reference\pc\round2_gfx\`; fix whatever looks wrong.
+- HUD text in window pixels (Consolas 15 px: objective line, key hints, NPC labels) does not grow with the window;
+  the original-UI font does. Next: font tiers in `gfx::initText` + a `gfx::charW()` used by story.cpp / dialogue.cpp
+  instead of `gfx::kCharW` (their box layouts assume an 8 px advance).
+- Pause menu: the objective box (a HUD rect) stays visible while its text is hidden (`App::render` clears only text).
+- Not pushed: pushing gfx-round2 needs the owner's permission in this session.
 - Open: the original lobby floor is vivid blue (a blue gradient overlay, probably a B-F semi-transparent effect drawn
   by FIELDSTG/WSTAG code) — not decoded; ours shows the decoded lavender floor. The green window piece on S210 uses a
   different CLUT row than the original teal (MASK piece CLUT choice, `FieldStage::renderPart`).

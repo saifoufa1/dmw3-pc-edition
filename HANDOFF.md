@@ -44,6 +44,9 @@ Useful flags (see `src/platform/win32_main.cpp`):
 - `--new-game`, `--no-story`, `--story-event NAME`, `--pos X Y`, `--stage S200` — field / story tests
 - `--frames N --screenshot out.bmp` (+ `--attack 1..3`, `--confirm-at F`, `--confirm-every N`) — headless screenshot tests
 - `--ui-preview hud|result|levelup|window|font|sheets` — original UI component preview
+- `--window W H` (with `--screenshot` the frame is composed off-screen at W x H, so captures never depend on the
+  window being visible), `--scale fit|stretch|integer`, `--no-wide`, `--lowres`, `--nearest`, `--msaa N`, `--crt`,
+  `--password TEXT`, `--mouse X Y --click-at F` (mouse tests) — display / input tests (options.cfg holds the player's choice)
 - `--dev` (F3 size dashboard in battle), `--sizes` (opens it) — developer only
 - dw3check: `--dump-pack TTCOMMPK out.bmp` (title / NAMEENT/NE_DATA_ packs, prints piece origins), `--dump-field S210 out.bmp --overlay` (prints trigger zones), `--dump-model ID out.bmp`, `--dump-arena N out.bmp`, `--dump-ui SHEET out.bmp`, `--dump-text DMG200`
   (dump output goes to a scratch folder, never into the repo)
