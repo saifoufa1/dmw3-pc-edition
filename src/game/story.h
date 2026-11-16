@@ -69,7 +69,14 @@ public:
     bool load(const std::filesystem::path& file, TextDb* text, std::string& err);
     bool loaded() const { return loaded_; }
     void newGame();
+    // PC Edition New Game: the opening (login, partner download, meeting Teddy/Kail) is skipped; applies the
+    // script's `newgame flags|done|objective` lines instead of running the start event.
+    void newGameSkipOpening();
     static std::filesystem::path defaultSavePath();
+    static std::filesystem::path saveDir();               // %APPDATA%/DMW3PC unless overridden
+    static void setSaveDir(const std::filesystem::path& dir);  // tests: --save-dir
+    const std::string& account() const { return account_; }
+    void setAccount(const std::string& a) { account_ = a; }
     bool saveGame(const std::filesystem::path& p, const std::string& stage, int x, int y) const;
     bool loadGame(const std::filesystem::path& p, std::string& stage, int& x, int& y);
 
@@ -151,6 +158,9 @@ private:
     std::set<std::string> flags_, done_;
     std::map<uint32_t, uint16_t> g_;
     std::string objective_, chapter_;
+    std::string account_;  // Digimon Online account the save belongs to
+    std::vector<std::string> skipFlags_, skipDone_;
+    std::string skipObjective_;
 
     // runner
     std::vector<size_t> queue_;

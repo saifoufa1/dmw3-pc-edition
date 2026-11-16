@@ -23,13 +23,19 @@ build\dmw3.exe                    # the game (finds game data by walking up from
 ```
 Game data layout expected: `<root>/DAT`, `<root>/PRO`, `<root>/STR` (the owner keeps it in `C:\DW3_Project\game_data`).
 
+Launching `build\dmw3.exe` with no flags starts the **PC flow**: title → menu → Digimon Online sign-up → starter
+pack → Asuka City Main Lobby (see docs/ROADMAP.md "PC launch flow"). Test it headlessly (ALWAYS with `--save-dir` on a
+scratch folder, and delete it afterwards, so no test save lands in `%APPDATA%\DMW3PC`):
+`--flow title|menu|options|signup|pack|newgame|continue`, `--account NAME`, `--select-set 1..3`, `--esc-at FRAME`,
+`--lobby STAGE`, e.g. `build\dmw3.exe --save-dir %TEMP%\dmw3t --flow newgame --account Tamer --select-set 2 --frames 400 --screenshot lobby.bmp`.
+
 Useful flags (see `src/platform/win32_main.cpp`):
 - `--battle`, `--form 0..3`, `--boss SPRITE`, `--arena N`, `--cam-yaw DEG`, `--dv` — jump into a fight
 - `--new-game`, `--no-story`, `--story-event NAME`, `--pos X Y`, `--stage S200` — field / story tests
 - `--frames N --screenshot out.bmp` (+ `--attack 1..3`, `--confirm-at F`, `--confirm-every N`) — headless screenshot tests
 - `--ui-preview hud|result|levelup|window|font|sheets` — original UI component preview
 - `--dev` (F3 size dashboard in battle), `--sizes` (opens it) — developer only
-- dw3check: `--dump-model ID out.bmp`, `--dump-arena N out.bmp`, `--dump-ui SHEET out.bmp`, `--dump-text DMG200`
+- dw3check: `--dump-pack TTCOMMPK out.bmp` (title / NAMEENT/NE_DATA_ packs, prints piece origins), `--dump-field S210 out.bmp --overlay` (prints trigger zones), `--dump-model ID out.bmp`, `--dump-arena N out.bmp`, `--dump-ui SHEET out.bmp`, `--dump-text DMG200`
   (dump output goes to a scratch folder, never into the repo)
 
 ## Code map
@@ -39,7 +45,9 @@ Useful flags (see `src/platform/win32_main.cpp`):
 | `src/formats` | pure parsers: sprites, field stage (MASK/TMPK), stage overlay (WSTAG), 3D model (DAT/MODEL), arena (MEFT1001-1055), text (USA encoding), UI sheets (*CS/*TM) |
 | `src/render` | OpenGL 1.1 renderer, model renderer, 3D camera |
 | `src/ui` | ORIGINAL UI drawn from game data: font, windows, battle HUD, fight report (EXP / level up) |
-| `src/game` | game modes: field, battle (3D arena, real-time), story + dialogue, common types |
+| `src/game` | `app.*` top-level state machine (title, menu, sign-up, starter pack, log-in, pause), `account.*` AccountService, `screen_style.h` front-end layout/colours, game modes: field, battle (3D arena, real-time), story + dialogue, common types (Party = the player's team) |
+| `src/ui/pack_art.*` | whole-screen original art (title / Digimon Online packs) as one texture per piece |
+| `data/starter_sets.cfg` | the original starter packs A/B/C (members, portraits, `@N` original texts) |
 | `data/stages/*.stage` | our stage files (walls, exits, NPCs) — editable in game with F2 |
 | `data/story/chapter1.story` | our story script (references original message ids; no game text) |
 | `data/battle_sizes.cfg` | battle sizes (Agumon 0.6, Greymon 1.5, MetalGreymon 2.1, WarGreymon 2.6) |

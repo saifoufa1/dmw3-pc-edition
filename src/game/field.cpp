@@ -217,7 +217,7 @@ bool Field::loadStage(size_t index, std::string& err, int arriveX, int arriveY) 
     placeParty(sx, sy);
     talkNpc_ = -1;
     status_ = "Stage " + id + (haveFile ? "" : "  (no stage data yet: auto walls - press F2 to edit)");
-    statusTimer_ = 150;
+    statusTimer_ = dev_ ? 150 : 0;  // players do not see stage ids
     if (story_) story_->onStage(id);
     return true;
 }
@@ -422,7 +422,7 @@ void Field::update(const Input& in) {
     if (touchCooldown_ > 0) --touchCooldown_;
     std::string err;
     if (in.hudP) hud_ = !hud_;
-    if (in.editorP) {
+    if (in.editorP && dev_) {
         editor_ = !editor_;
         status_ = editor_ ? "EDITOR ON (F2 to leave, Ctrl+S to save)" : "Editor off";
         statusTimer_ = 120;
@@ -433,7 +433,9 @@ void Field::update(const Input& in) {
         if (fadingOut_) {
             if (++fade_ >= kFadeTicks) {
                 auto it = std::find(stageIds_.begin(), stageIds_.end(), pendingExit_.target);
-                if (it != stageIds_.end() && loadStage(size_t(it - stageIds_.begin()), err, pendingExit_.arriveX, pendingExit_.arriveY)) {}
+                if (it != stageIds_.end() && loadStage(size_t(it - stageIds_.begin()), err, pendingExit_.arriveX, pendingExit_.arriveY) &&
+                    !dev_)
+                    saveStory();  // PC flow: autosave on every area change (Continue resumes here)
                 fadingOut_ = false;
                 fade_ = kFadeTicks;
             }
@@ -458,7 +460,13 @@ void Field::update(const Input& in) {
         return;
     }
 
-    if (in.nextStageP || in.prevStageP) {
+    if (party_.team.size() > 1 && in.partnerP && talkNpc_ < 0 && !editor_) {  // Tab: next team member
+        party_.setActive((party_.active + 1) % int(party_.team.size()));
+        reloadPartner();
+        status_ = party_.partnerName + " is your partner now";
+        statusTimer_ = 120;
+    }
+    if (dev_ && (in.nextStageP || in.prevStageP)) {
         size_t n = stageIds_.size();
         size_t idx = in.nextStageP ? (stageIndex_ + 1) % n : (stageIndex_ + n - 1) % n;
         for (size_t tries = 0; tries < n && !loadStage(idx, err); ++tries)
@@ -743,7 +751,13 @@ void Field::renderHud(int ww, int wh) {
             gfx::drawTextCentered(wx, wy, ("-> " + e.target).c_str(), 0xff40ffffu);
         }
 
-    if (hud_ && !cine) {
+    if (hud_ && !cine && !dev_) {
+        gfx::drawText(10, wh - 12,
+                      party_.team.size() > 1 ? "Move: WASD/Arrows  Run: Shift  Talk: Space  Partner: Tab  Menu: Esc  HUD: F1"
+                                             : "Move: WASD/Arrows  Run: Shift  Talk: Space  Menu: Esc  HUD: F1",
+                      0xffb0e0ffu);
+    }
+    if (hud_ && !cine && dev_) {
         std::snprintf(line, sizeof line, "DMW3 PC Edition v%s | Stage %s (%zu/%zu)  pos %d,%d  %s%s", DMW3_VERSION,
                       stageIds_[stageIndex_].c_str(), stageIndex_ + 1, stageIds_.size(), int(player_.x), int(player_.y),
                       "", editor_ ? "  [EDITOR]" : "");

@@ -29,6 +29,28 @@ Goal: "the first hour of DW3 plays on PC natively".
 
 Cross-cutting: game-state stack (Title/Field/Battle/Menu), SDL2 port for Linux/Steam Deck after v0.01.
 
+## PC launch flow ✅ (2026-11-16, `src/game/app.*`)
+Owner design: MMO-like. Launch → original title screen ("Press Start Button", DAT/SCREEN/TTCOMMPK + TLOGOUSA) →
+menu (original Start / Continue plates + our Options / Quit; Continue only when a save + local account exist) →
+**Start** skips the intro movie, the street scene and every talk before the Account Clerk → **Digimon Online sign-up**
+(our own screen in the original look: hex background CMNBGD, terminal window + logo from NE_DATA_; account name +
+password, typed on the keyboard or picked from an arrow/gamepad letter grid; layout/colours in `src/game/screen_style.h`)
+→ **starter pack** (the ORIGINAL A Balanced / B Powerful / C Maniac packs, original panel + texts from USNAMEET,
+`data/starter_sets.cfg`) → "Register account? YES/NO" → spawn in the **Asuka City Main Lobby (S210)** on the
+platform in front of the Login Room door (reference shot 38). **Continue** = log in with the local account → back
+where the player saved. In game: Esc = menu (Resume / Save / Return to Title / Quit), Tab = next team member,
+autosave on every area change. Accounts go through `AccountService` (`LocalAccountService` now; an
+`OnlineAccountService` can replace it without touching the screens). Save: `%APPDATA%\DMW3PC\story.sav` +
+`account.cfg` + `options.cfg` (tests: `--save-dir`). Developer tools (F2 editor, Q/E stage browser, stage HUD) only
+with `--dev`; the old test flags (`--stage`, `--battle`, `--new-game`, ...) still start the field/battle directly.
+- Next: online play (server login, other players in the lobby) — networking not started.
+- PLACEHOLDER: the S210 exits (west + south-east corridors) lead to S200 by hand; the S200 lobby door (trigger 0xA5)
+  leads back. The Login Room / side room doors of S210 are not linked.
+- PLACEHOLDER: one local account per PC; New Game replaces it. The password is only hashed (no security yet).
+- PLACEHOLDER: team members share one level/EXP (Party.level); per-Digimon stats come with the status menu.
+- Stages: S210/S211 = Main Lobby (day/night?), S212 = lobby used by the opening cutscene, S785 = MAGAMI Online Center
+  (real world, the Account Clerk), S780 = real-world street (opening), S790 = Online Center (inner part).
+
 ## Story (chapter 1, `data/story/chapter1.story`)
 Login (USDMG200 block 0) → Tamer Service: download partner (block 2 + choice of Agumon / Guilmon / Patamon,
 blocks 3–5) → Teddy & Kail scene → Tamer Genji, first story battle on touch (blocks 11/12) → wild Black Agumon

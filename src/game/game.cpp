@@ -55,6 +55,49 @@ bool Game::init(const std::filesystem::path& dataRoot, const std::filesystem::pa
     return true;
 }
 
+bool Game::initFlow(const std::filesystem::path& dataRoot, const std::filesystem::path& stageDir, const FlowStart& fs,
+                    const DebugOptions& dbg, std::string& err) {
+    models_.setRoot(dataRoot);
+    dbg_ = dbg;
+    text_.setRoot(dataRoot);
+    std::string stage = fs.stage.empty() ? "S210" : fs.stage;
+    int sx = fs.x, sy = fs.y;
+    std::string serr;
+    if (!story_.load(stageDir.parent_path() / "story" / "chapter1.story", &text_, serr)) {
+        err = serr;
+        return false;
+    }
+    field_.attachStory(&story_);
+    if (fs.newGame) {
+        story_.newGameSkipOpening();
+        story_.setAccount(fs.account);
+        party_.team = fs.team;
+        party_.pack = fs.pack;
+        if (!party_.setActive(0)) { err = "starter pack has no Digimon"; return false; }
+    } else {
+        if (!story_.loadGame(Story::defaultSavePath(), stage, sx, sy)) {
+            err = "cannot load " + Story::defaultSavePath().string();
+            return false;
+        }
+        if (story_.account().empty()) story_.setAccount(fs.account);
+    }
+    if (!fs.account.empty()) text_.setPlayerName(fs.account);  // the tamer's name in the original text
+    field_.setDevTools(dbg.devTools);
+    if (!field_.init(dataRoot, stageDir, stage, err)) return false;
+    if (sx >= 0) field_.warpTo(stage, sx, sy);
+    field_.reloadPartner();
+    battle_.setSizeFile(stageDir.parent_path() / "battle_sizes.cfg");
+    if (dbg.devTools) battle_.enableDevTools();
+    if (fs.newGame) save();  // the account now has a save: Continue appears in the title menu
+    return true;
+}
+
+bool Game::save() {
+    if (!story_.loaded()) return false;
+    field_.saveStory();
+    return std::filesystem::exists(Story::defaultSavePath());
+}
+
 void Game::update(const Input& in) {
     switch (mode_) {
         case Mode::Field:

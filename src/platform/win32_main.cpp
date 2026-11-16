@@ -4,6 +4,10 @@
 //   testing: [--screenshot out.bmp --frames N] [--autowalk] [--battle] [--boss <sprite>] [--autobattle]
 //            [--dv] (full digivolve gauge) [--form 0..3] (start digivolved) [--digivolve-at FRAME] [--attack 1..3]
 //            [--arena 1..55] (battle arena MEFT10xx) [--cam-yaw DEG] (battle camera angle)
+//   PC flow (default when no test flag is given): title -> menu -> Digimon Online sign-up -> starter pack -> lobby
+//            [--flow title|menu|options|signup|pack|newgame|continue] (start at / drive to that screen)
+//            [--esc-at FRAME] (press Esc)  [--select-set N] (pack 1..3)  [--account NAME]  [--save-dir DIR] (tests: keep saves out of APPDATA)
+//            [--lobby STAGE] (default S210, Asuka City Main Lobby)
 //   story:   [--new-game] [--no-story] [--story-flags a,b] [--story-event NAME] [--pos X Y]
 //            [--confirm-at FRAME]... [--confirm-every N] [--walk lrud FROM TO]
 #include <windows.h>
@@ -16,6 +20,7 @@
 #include <vector>
 
 #include "core/bytes.h"
+#include "game/app.h"
 #include "game/game.h"
 #include "ui/ui_draw.h"
 #include "ui/ui_preview.h"
@@ -162,11 +167,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     int digivolveAt = -1;  // testing: press digivolve on this frame
     int autoAttack = 0;    // testing: use only this move (1..3) every 100 frames
     std::vector<int> confirmAt;  // testing: press Space on these frames
+    std::vector<int> escAt;      // testing: press Esc on these frames (PC flow pause menu)
     int confirmEvery = 0;        // testing: press Space every N frames
     std::string walkDir;         // testing: hold a direction (l/r/u/d, combinable) from frame A to B
     int walkFrom = 0, walkTo = 0;
     DebugOptions dbg;
     std::string uiPreview;  // --ui-preview MODE: original-UI component preview (src/ui/ui_preview.h)
+    FlowOptions flow;
+    bool legacy = false;    // any old test flag: start the field/battle directly (no title flow)
     auto a = args();
     for (size_t i = 0; i < a.size(); ++i) {
         if (a[i] == "--data" && i + 1 < a.size()) dataArg = a[++i];
@@ -183,6 +191,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         }
         else if (a[i] == "--pos" && i + 2 < a.size()) { dbg.posX = std::stoi(a[i + 1]); dbg.posY = std::stoi(a[i + 2]); i += 2; }
         else if (a[i] == "--confirm-at" && i + 1 < a.size()) confirmAt.push_back(std::stoi(a[++i]));
+        else if (a[i] == "--esc-at" && i + 1 < a.size()) escAt.push_back(std::stoi(a[++i]));
         else if (a[i] == "--confirm-every" && i + 1 < a.size()) confirmEvery = std::stoi(a[++i]);
         else if (a[i] == "--walk" && i + 3 < a.size()) { walkDir = a[i + 1]; walkFrom = std::stoi(a[i + 2]); walkTo = std::stoi(a[i + 3]); i += 3; }
         else if (a[i] == "--screenshot" && i + 1 < a.size()) shotPath = a[++i];
@@ -200,7 +209,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--cam-yaw" && i + 1 < a.size()) dbg.camYaw = std::stof(a[++i]);
         else if (a[i] == "--boss" && i + 1 < a.size()) { dbg.startBattle = true; dbg.battleSprite = a[++i]; }
         else if (a[i] == "--ui-preview" && i + 1 < a.size()) uiPreview = a[++i];  // hud|hud2|result|levelup|window|font|sheets
+        else if (a[i] == "--flow" && i + 1 < a.size()) flow.stopAt = a[++i];
+        else if (a[i] == "--select-set" && i + 1 < a.size()) flow.selectPack = std::stoi(a[++i]);
+        else if (a[i] == "--account" && i + 1 < a.size()) flow.account = a[++i];
+        else if (a[i] == "--lobby" && i + 1 < a.size()) flow.lobbyStage = a[++i];
+        else if (a[i] == "--save-dir" && i + 1 < a.size()) Story::setSaveDir(fs::path(a[++i]));
     }
+    legacy = dbg.stageGiven || dbg.newGame || dbg.noStory || dbg.startBattle || !dbg.storyEvent.empty() ||
+             !dbg.storyFlags.empty() || dbg.posX >= 0;
     if (!shotPath.empty() && shotFrames <= 0) shotFrames = 120;
 
     char exe[MAX_PATH];
@@ -244,6 +260,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     int exitCode = 0;
     {
         Game game;
+        App app;
         std::string err;
         std::unique_ptr<ui::Preview> preview;
         if (!uiPreview.empty()) {
@@ -253,11 +270,19 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                 g_running = false;
                 exitCode = 1;
             }
-        } else if (ui::init(root), !game.init(root, findStageDir(exeDir), stage, dbg, err)) {  // original UI (font, windows, HUD)
+        } else if (legacy) {
+            if (ui::init(root), !game.init(root, findStageDir(exeDir), stage, dbg, err)) {  // original UI (font, windows, HUD)
+                MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - load error", MB_ICONERROR);
+                g_running = false;
+                exitCode = 1;
+            }
+        } else if (!app.init(root, findStageDir(exeDir), dbg, flow, err)) {
             MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - load error", MB_ICONERROR);
             g_running = false;
             exitCode = 1;
         }
+        bool isFullscreen = false;
+        WINDOWPLACEMENT savedPlace{sizeof(WINDOWPLACEMENT)};
 
         LARGE_INTEGER freq, last, now;
         QueryPerformanceFrequency(&freq);
@@ -300,6 +325,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                     h.atk3 = autoAttack == 3 && frame % 100 == 80;
                 }
                 for (int f : confirmAt) if (frame == f) h.confirm = true;
+                for (int f : escAt) if (frame == f) h.key[VK_ESCAPE] = true;
                 if (confirmEvery > 0 && frame % confirmEvery == 0 && frame > 0) h.confirm = true;
                 if (!walkDir.empty() && frame >= walkFrom && frame < walkTo) {
                     h.left |= walkDir.find('l') != std::string::npos;
@@ -307,7 +333,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                     h.up |= walkDir.find('u') != std::string::npos;
                     h.down |= walkDir.find('d') != std::string::npos;
                 }
-                if (h.quit) g_running = false;
+                if (h.quit && (legacy || preview)) g_running = false;  // the PC flow handles Esc itself
 
                 Input in;
                 in.up = h.up; in.down = h.down; in.left = h.left; in.right = h.right; in.run = h.run;
@@ -335,11 +361,31 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                 if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) gfx::toVirtual(pt.x, pt.y, in.mx, in.my);
                 prev = h;
                 if (preview) preview->update(in.confirmP);
-                else game.update(in);
+                else if (legacy) game.update(in);
+                else {
+                    app.update(in);
+                    if (app.quitRequested()) g_running = false;
+                }
+            }
+            if (!preview && !legacy && app.fullscreen() != isFullscreen && shotPath.empty()) {  // Options: borderless fullscreen
+                isFullscreen = app.fullscreen();
+                if (isFullscreen) {
+                    GetWindowPlacement(hwnd, &savedPlace);
+                    MONITORINFO mi{sizeof(mi)};
+                    GetMonitorInfoA(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi);
+                    SetWindowLongA(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+                    SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                                 mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED);
+                } else {
+                    SetWindowLongA(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+                    SetWindowPlacement(hwnd, &savedPlace);
+                    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                }
             }
 
             if (preview) preview->render(g_winW, g_winH);
-            else game.render(g_winW, g_winH);
+            else if (legacy) game.render(g_winW, g_winH);
+            else app.render(g_winW, g_winH);
             ++frame;
             if (!shotPath.empty() && frame >= shotFrames) {
                 glFinish();
@@ -348,7 +394,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
             }
             SwapBuffers(dc);
         }
-        if (!preview) ui::shutdown();
+        if (legacy) ui::shutdown();
+        else if (!preview) app.shutdown();
     }  // Game (and its textures) destroyed while the GL context is still current
 
     wglMakeCurrent(nullptr, nullptr);

@@ -14,6 +14,8 @@
 # talkbank NN STAGE...             these stages use USTALKNN.BIN for the original NPC lines
 # gflag HEX VALUE                  initial value of an ORIGINAL game flag (WSTAG show/talk conditions)
 # starter SPRITE "Name"            partner choices for `partner choose` (first = default)
+# newgame flags|done|objective ... what the PC Edition New Game starts with (the opening is skipped: flags set,
+#                                  events marked as done, objective shown). The team comes from data/starter_sets.cfg.
 # gate STAGE TARGET "message" if CONDS     exit STAGE -> TARGET is closed while CONDS hold
 # actor ID STAGE talk|fight|boss SPRITE X Y DIR "Name" [level N] [line REF] [enemy SPRITE "Name"] [if CONDS]
 #                                  a story NPC, present while CONDS hold. fight/boss = touch to fight;
@@ -49,7 +51,13 @@ starter P006AGUM "Agumon"        # USDMG200 block 4 team (Monmon, Agumon, Renamo
 starter P008GIRU "Guilmon"       # block 5 team (Kumamon, Guilmon, Patamon)
 starter P010PATA "Patamon"       # block 3 team (Kotemon, Renamon, Patamon)
 
-gate S200 S400 "I should finish things in town first..." if !genji_won
+# PC Edition New Game (title menu -> Digimon Online sign-up -> starter pack -> Asuka City Main Lobby S210):
+# the opening below (login, partner download, Teddy & Kail) is skipped; the game starts in this state.
+newgame flags partner_chosen friends_split
+newgame done login download
+newgame objective "Explore Asuka City - the town lies beyond the Main Lobby"
+
+gate S200 S400"I should finish things in town first..." if !genji_won
 gate S200 * "I need my partner Digimon data first." if !partner_chosen
 
 # ---- story NPCs ---------------------------------------------------------------------------------

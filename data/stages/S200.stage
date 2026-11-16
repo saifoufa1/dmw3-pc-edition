@@ -14,8 +14,10 @@
 #   live in data/story/chapter1.story.
 # exits: west bridge = decoded trigger zone 0x20 (destination hand-picked: forest S400 for the demo);
 #   links to S202/S218 = hand-placed at the stairs nearest to their decoded trigger zones.
+#   lobby door = decoded trigger zone 0xA5 (976,200 85x46, right above the city spawn) -> Main Lobby S210.
 spawn 1000 236
 exit 56 792 57 32 S400 205 862
+exit 990 200 60 30 S210 735 398
 exit 440 692 16 8 S202 236 282
 exit 574 625 16 8 S202 388 230
 exit 686 569 16 8 S202 500 172

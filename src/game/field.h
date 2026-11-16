@@ -38,6 +38,8 @@ public:
 
     // Story glue: the story decides events, story NPCs, gates and objectives (may be null).
     void attachStory(Story* s) { story_ = s; }
+    // Developer tools (F2 editor, Q/E stage browser, debug HUD line). Off for players (PC flow without --dev).
+    void setDevTools(bool on) { dev_ = on; }
     const std::string& stageId() const { return stageIds_[stageIndex_]; }
     int playerX() const { return int(player_.x); }
     int playerY() const { return int(player_.y); }
@@ -142,6 +144,7 @@ private:
 
     float camX_ = 0, camY_ = 0;
     bool hud_ = true;
+    bool dev_ = true;  // legacy test modes keep the tools; the PC flow turns them off unless --dev
     std::string status_;
     int statusTimer_ = 0;
     long long ticks_ = 0;

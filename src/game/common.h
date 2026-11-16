@@ -78,13 +78,31 @@ struct EvoStage {
 const EvoStage& evoStage(int level);  // 0 = Rookie .. 3 = Mega
 constexpr int kMaxEvo = 3;
 
-// Persistent player/partner state shared by field and battle.
+// One Digimon of the player's team (3 in a starter pack).
+struct TeamMember {
+    std::string sprite, name;
+};
+
+// Persistent player/partner state shared by field and battle. Everything the player owns lives here (plus the
+// account), so it can be serialized as one block later (local save now, server later).
 struct Party {
-    std::string partnerId = "P006AGUM";
+    std::string partnerId = "P006AGUM";   // the ACTIVE partner (mirrors team[active] when a team exists)
     std::string partnerName = "Agumon";
+    std::vector<TeamMember> team;          // starter pack members; empty = single partner (old saves, tests)
+    int active = 0;
+    std::string pack;                      // starter pack letter ("A", "B", "C"), "" = none
     int wins = 0;
     int level = 1, exp = 0, bits = 0;  // partner level, EXP toward the next level, money
     static int expToNext(int level) { return 30 + 20 * level; }
+
+    // Makes team member i the active partner. False if out of range.
+    bool setActive(int i) {
+        if (i < 0 || i >= int(team.size())) return false;
+        active = i;
+        partnerId = team[size_t(i)].sprite;
+        partnerName = team[size_t(i)].name;
+        return true;
+    }
 };
 
 }  // namespace dw3

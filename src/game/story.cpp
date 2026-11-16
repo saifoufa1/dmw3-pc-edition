@@ -86,6 +86,7 @@ bool Story::load(const fs::path& file, TextDb* text, std::string& err) {
     if (!f) { err = "cannot open " + file.string(); return false; }
     file_ = file.filename().string();
     actors_.clear(); events_.clear(); gates_.clear(); starters_.clear(); talkBanks_.clear(); initG_.clear();
+    skipFlags_.clear(); skipDone_.clear(); skipObjective_.clear();
     std::string line;
     int ln = 0;
     StoryEvent* ev = nullptr;
@@ -126,6 +127,12 @@ bool Story::load(const fs::path& file, TextDb* text, std::string& err) {
         else if (k == "gflag" && t.size() >= 3) initG_[uint32_t(std::strtoul(t[1].c_str(), nullptr, 16))] = uint16_t(toInt(t[2]));
         else if (k == "chapter") chapterInit_ = t.size() > 2 ? unq(t[2]) : "";
         else if (k == "starter" && t.size() >= 3) starters_.push_back({t[1], unq(t[2])});
+        else if (k == "newgame" && t.size() >= 3) {  // what New Game (PC flow, opening skipped) starts with
+            if (t[1] == "flags") for (size_t i = 2; i < t.size(); ++i) skipFlags_.push_back(t[i]);
+            else if (t[1] == "done") for (size_t i = 2; i < t.size(); ++i) skipDone_.push_back(t[i]);
+            else if (t[1] == "objective") skipObjective_ = unq(t[2]);
+            else return bad("newgame expects flags|done|objective");
+        }
         else if (k == "gate" && t.size() >= 4) {
             StoryGate g{t[1], t[2], unq(t[3]), {}};
             size_t i = 4;
@@ -209,13 +216,34 @@ void Story::newGame() {
     ++revision_;
     party_.partnerId = "P006AGUM";
     party_.partnerName = "Agumon";
+    party_.team.clear();
+    party_.active = 0;
+    party_.pack.clear();
     start(StoryTrigger::Start, "");
 }
 
-fs::path Story::defaultSavePath() {
+namespace {
+fs::path g_saveDir;  // --save-dir override (tests); empty = %APPDATA%/DMW3PC
+}
+
+void Story::setSaveDir(const fs::path& dir) { g_saveDir = dir; }
+
+fs::path Story::saveDir() {
+    if (!g_saveDir.empty()) return g_saveDir;
     const char* app = std::getenv("APPDATA");
     fs::path base = app && *app ? fs::path(app) : fs::current_path();
-    return base / "DMW3PC" / "story.sav";
+    return base / "DMW3PC";
+}
+
+fs::path Story::defaultSavePath() { return saveDir() / "story.sav"; }
+
+void Story::newGameSkipOpening() {
+    newGame();
+    abortEvents();  // newGame() already began the start event (login cutscene): drop it
+    for (const auto& f : skipFlags_) flags_.insert(f);
+    for (const auto& e : skipDone_) done_.insert(e);
+    if (!skipObjective_.empty()) objective_ = skipObjective_;
+    ++revision_;
 }
 
 bool Story::saveGame(const fs::path& p, const std::string& stage, int x, int y) const {
@@ -226,6 +254,10 @@ bool Story::saveGame(const fs::path& p, const std::string& stage, int x, int y) 
     f << "dmw3-story 1\n";
     f << "stage " << stage << ' ' << x << ' ' << y << "\n";
     f << "partner " << party_.partnerId << ' ' << party_.partnerName << "\n";
+    if (!account_.empty()) f << "account " << account_ << "\n";
+    if (!party_.pack.empty()) f << "pack " << party_.pack << "\n";
+    for (const auto& m : party_.team) f << "member " << m.sprite << ' ' << m.name << "\n";
+    if (!party_.team.empty()) f << "active " << party_.active << "\n";
     f << "wins " << party_.wins << "\n";
     f << "level " << party_.level << " " << party_.exp << " " << party_.bits << "\n";
     f << "chapter " << chapter_ << "\n";
@@ -248,6 +280,9 @@ bool Story::loadGame(const fs::path& p, std::string& stage, int& x, int& y) {
     wait_ = Wait::None;
     dlg_.close();
     blackout_ = false;
+    party_.team.clear();
+    party_.pack.clear();
+    party_.active = 0;
     while (std::getline(f, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         const size_t sp = line.find(' ');
@@ -255,6 +290,10 @@ bool Story::loadGame(const fs::path& p, std::string& stage, int& x, int& y) {
         std::istringstream is(v);
         if (k == "stage") is >> stage >> x >> y;
         else if (k == "partner") { is >> party_.partnerId; std::getline(is >> std::ws, party_.partnerName); partnerChanged_ = true; }
+        else if (k == "account") account_ = v;
+        else if (k == "pack") party_.pack = v;
+        else if (k == "member") { TeamMember m; is >> m.sprite; std::getline(is >> std::ws, m.name); party_.team.push_back(m); }
+        else if (k == "active") is >> party_.active;
         else if (k == "wins") is >> party_.wins;
         else if (k == "level") is >> party_.level >> party_.exp >> party_.bits;
         else if (k == "chapter") chapter_ = v;
@@ -263,6 +302,7 @@ bool Story::loadGame(const fs::path& p, std::string& stage, int& x, int& y) {
         else if (k == "done") done_.insert(v);
         else if (k == "g") { std::string key; unsigned val = 0; is >> key >> val; g_[uint32_t(std::strtoul(key.c_str(), nullptr, 16))] = uint16_t(val); }
     }
+    if (!party_.team.empty()) party_.setActive(party_.active < int(party_.team.size()) ? party_.active : 0);
     ++revision_;
     return true;
 }

@@ -29,11 +29,27 @@ struct DebugOptions {
     int posX = -1, posY = -1;   // --pos X Y: place the player
 };
 
+// How the PC flow (title menu) starts a play session.
+struct FlowStart {
+    bool newGame = true;           // false = Continue (load the save)
+    std::string account;           // logged-in Digimon Online account
+    std::string pack;              // New Game: starter pack letter
+    std::vector<TeamMember> team;  // New Game: the pack's Digimon (first = active)
+    std::string stage;             // New Game: lobby stage (MAGAMI Online Center)
+    int x = -1, y = -1;            // New Game: spawn (-1 = the stage's decoded spawn)
+};
+
 class Game {
 public:
     Game() : field_(sprites_, party_), battle_(sprites_, models_, party_), story_(sprites_, party_) {}
     bool init(const std::filesystem::path& dataRoot, const std::filesystem::path& stageDir,
               const std::string& startStage, const DebugOptions& dbg, std::string& err);
+    // PC flow: New Game (opening skipped, party from the starter pack, spawn in the lobby) or Continue.
+    bool initFlow(const std::filesystem::path& dataRoot, const std::filesystem::path& stageDir, const FlowStart& fs,
+                  const DebugOptions& dbg, std::string& err);
+    bool save();                   // writes the save (false if no story / failed)
+    bool inField() const { return mode_ == Mode::Field; }
+    bool storyBusy() const { return story_.busy(); }
     void update(const Input& in);
     void render(int windowW, int windowH);
 

@@ -50,6 +50,10 @@ if(WIN32)
     src/ui/battle_hud.cpp
     src/ui/result_screen.cpp
     src/ui/ui_preview.cpp
+    src/ui/pack_art.cpp
+    src/game/account.cpp
+    src/game/starter_sets.cpp
+    src/game/app.cpp
     src/game/game.cpp)
   target_link_libraries(dmw3 PRIVATE dw3formats opengl32 gdi32 user32 shell32)
   target_compile_definitions(dmw3 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
