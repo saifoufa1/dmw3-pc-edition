@@ -44,6 +44,9 @@ public:
     void setCommands(const HudCommand* cmds, int count);
     void setMessage(const std::string& text) { message_ = text; }
     void setVisible(bool v) { visible_ = v; }
+    // Mouse: index of the command line under virtual point (x, y), -1 = none. setHover() shows the cursor there.
+    int commandAt(float x, float y) const;
+    void setHover(int i) { hover_ = i; }
     void update();
     void render() const;
 
@@ -54,6 +57,7 @@ private:
     float shownHp_[2] = {-1.f, -1.f};  // eased bar values (partner, enemy)
     int ticks_ = 0;
     bool visible_ = true;
+    int hover_ = -1;
 };
 
 }  // namespace dw3::ui

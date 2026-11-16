@@ -112,7 +112,42 @@ bool Game::save() {
     return std::filesystem::exists(Story::defaultSavePath());
 }
 
-void Game::update(const Input& in) {
+void Game::mouseInField(Input& in) {
+    const bool onScreen = in.mx >= gfx::viewLeft() && in.mx < gfx::viewRight() && in.my >= 0 && in.my < kScreenH;
+    if (story_.busy()) {  // dialogue / cutscene: a click = confirm
+        walkTo_ = false;
+        if (in.lmbP && onScreen) in.confirmP = in.confirm = true;
+        return;
+    }
+    if (in.lmbP && onScreen && !dbg_.devTools) {
+        walkTo_ = true;
+        walkX_ = in.mx + field_.camX();
+        walkY_ = in.my + field_.camY();
+        walkStuck_ = 0;
+        walkStage_ = field_.stageId();
+    }
+    if (!walkTo_) return;
+    if (in.up || in.down || in.left || in.right || field_.stageId() != walkStage_) { walkTo_ = false; return; }
+    const float dx = walkX_ - float(field_.playerX()), dy = walkY_ - float(field_.playerY());
+    if (std::fabs(dx) <= 2.f && std::fabs(dy) <= 2.f) { walkTo_ = false; return; }
+    // 8 directions on the 2:1 isometric grid (screen y counts double)
+    const float ax = std::fabs(dx), ay = std::fabs(dy) * 2.f;
+    if (ax > 2.f && ax > 0.41f * ay) { in.right = dx > 0; in.left = dx < 0; }
+    if (std::fabs(dy) > 1.5f && ay > 0.41f * ax) { in.down = dy > 0; in.up = dy < 0; }
+    in.run = in.run || ax + ay > 80.f;
+    if (field_.playerX() == walkLastX_ && field_.playerY() == walkLastY_) {
+        if (++walkStuck_ > 20) walkTo_ = false;  // blocked by a wall
+    } else {
+        walkStuck_ = 0;
+    }
+    walkLastX_ = field_.playerX();
+    walkLastY_ = field_.playerY();
+}
+
+void Game::update(const Input& rawIn) {
+    Input in = rawIn;
+    if (mode_ == Mode::Field) mouseInField(in);
+    else walkTo_ = false;
     if (++playFrames_ >= 60) { playFrames_ = 0; ++party_.playSeconds; }  // 60 Hz ticks -> play time
     switch (mode_) {
         case Mode::Field:
@@ -153,7 +188,7 @@ void Game::update(const Input& in) {
 }
 
 void Game::render(int ww, int wh) {
-    gfx::beginFrame(ww, wh);
+    gfx::beginFrame(ww, wh, true);  // field + battle may use the extra width of a wide window
     const bool inBattle = mode_ == Mode::Battle;
     if (inBattle) battle_.render();
     else field_.render();

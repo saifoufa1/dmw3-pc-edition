@@ -24,6 +24,7 @@ struct FlowOptions {
     std::string stopAt;      // --flow title|menu|options|slots|newslot|signup|pack|newgame|continue
     int slot = 0;            // --slot N (1-based): save slot for --flow newgame / continue (0 = first free / used)
     std::string account;     // --account NAME: pre-filled account name (tests)
+    std::string password;    // --password TEXT: pre-filled password (tests; shown masked)
     int selectPack = 0;      // --select-set N (1-based): pick this pack automatically
     std::string lobbyStage = "S210";  // Asuka City Main Lobby (reference shot 38)
 };
@@ -85,7 +86,12 @@ private:
     void renderPause();
     void loadRegText();
     void drawMsg(float x, float y, const std::string& ref, uint32_t color);
-    void drawMenuWindow(const char* title, const std::vector<std::string>& items, int sel);
+    void drawMenuWindow(const char* title, const std::vector<std::string>& items, int sel, float w = 0);
+    // Mouse helpers (virtual coordinates). Hovering selects only when the mouse moved this tick.
+    int menuWindowItem(int count, float w, float mx, float my) const;  // item of drawMenuWindow, -1 = none
+    std::vector<std::string> optionLabels() const;
+    void changeOption(int item, int dir);
+    void renderOptionsWindow();
 
     std::filesystem::path root_, stageDir_;
     DebugOptions dbg_;
@@ -111,6 +117,10 @@ private:
     std::vector<int> menuItems_;  // 0 New Game, 1 Continue, 2 Options, 3 Quit
     int menuSel_ = 0, optSel_ = 0, pauseSel_ = 0, packSel_ = 0;
     bool fullscreen_ = false;
+    bool optFromPause_ = false;        // Options opened from the in-game menu (drawn over the game)
+    bool showPass_ = false;            // sign-up: show the password as text (toggle), else '*'
+    float lastMx_ = -1, lastMy_ = -1;
+    bool mouseMoved_ = false;
     std::string pauseMsg_;
     int pauseMsgTicks_ = 0;
 

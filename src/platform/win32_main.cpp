@@ -10,6 +10,10 @@
 //            [--lobby STAGE] (default S210, Asuka City Main Lobby)  [--flow-event NAME] [--flow-pos X Y] (once playing)
 //   story:   [--new-game] [--no-story] [--story-flags a,b] [--story-event NAME] [--pos X Y]
 //            [--confirm-at FRAME]... [--confirm-every N] [--confirm-from FRAME] [--walk lrud FROM TO]
+//   video:   [--window W H] (client size; with --screenshot the frame is composed off-screen at W x H, so the
+//            capture does not depend on the window being visible or fitting the monitor)
+//            [--scale fit|stretch|integer] [--no-wide] [--lowres] [--nearest] [--msaa N] [--crt]
+//            [--mouse X Y] [--click-at FRAME] (tests: mouse in window pixels, left click on that frame)
 #include <windows.h>
 #include <shellapi.h>
 #include <GL/gl.h>
@@ -33,6 +37,18 @@ namespace {
 int g_winW = 960, g_winH = 720;
 bool g_running = true;
 int g_wheel = 0;  // mouse wheel notches since the last tick (+ = toward the user)
+bool g_fixedSize = false;  // screenshot tests: the frame size comes from --window, not from the window
+
+// Real pixels on high-DPI monitors (otherwise Windows scales the window bitmap and fullscreen gets blurry).
+void makeDpiAware() {
+    if (HMODULE u = GetModuleHandleA("user32.dll")) {
+        using CtxFn = BOOL(WINAPI*)(HANDLE);
+        if (auto f = reinterpret_cast<CtxFn>(reinterpret_cast<void*>(GetProcAddress(u, "SetProcessDpiAwarenessContext"))))
+            if (f(reinterpret_cast<HANDLE>(static_cast<intptr_t>(-4)))) return;  // per-monitor v2
+        using AwareFn = BOOL(WINAPI*)();
+        if (auto f = reinterpret_cast<AwareFn>(reinterpret_cast<void*>(GetProcAddress(u, "SetProcessDPIAware")))) f();
+    }
+}
 
 // ---- XInput, loaded dynamically so the exe runs even without the DLL. ----
 struct XGamepad { WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; };
@@ -50,7 +66,10 @@ void loadXInput() {
 
 LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-        case WM_SIZE: g_winW = LOWORD(lp); g_winH = HIWORD(lp); return 0;
+        case WM_SIZE:
+            if (!g_fixedSize) { g_winW = LOWORD(lp); g_winH = HIWORD(lp); }
+            return 0;
+        case WM_ERASEBKGND: return 1;  // the game repaints the whole client area
         case WM_MOUSEWHEEL: g_wheel += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -1 : 1; return 0;  // battle camera zoom
         case WM_CLOSE: g_running = false; return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -121,13 +140,7 @@ Held poll(HWND hwnd, bool focused) {
 
 bool saveScreenshot(const fs::path& p) {
     Image img;
-    img.resize(g_winW, g_winH);
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glReadPixels(0, 0, g_winW, g_winH, GL_RGBA, GL_UNSIGNED_BYTE, img.px.data());
-    for (int y = 0; y < g_winH / 2; ++y)  // GL origin is bottom-left
-        std::swap_ranges(img.px.begin() + size_t(y) * g_winW, img.px.begin() + size_t(y + 1) * g_winW,
-                         img.px.begin() + size_t(g_winH - 1 - y) * g_winW);
-    for (auto& c : img.px) c |= 0xff000000u;
+    gfx::readFrame(img);  // the composed frame (off-screen target in screenshot runs)
     return writeBmp(p, img);
 }
 
@@ -173,6 +186,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     std::string walkDir;         // testing: hold a direction (l/r/u/d, combinable) from frame A to B
     int walkFrom = 0, walkTo = 0;
     DebugOptions dbg;
+    int winReqW = 0, winReqH = 0;      // --window W H
+    std::string scaleArg;              // --scale fit|stretch|integer
+    bool noWide = false, lowRes = false, nearest = false, crt = false;
+    int msaaArg = -1;
+    int mouseX = -1, mouseY = -1;      // --mouse X Y (window pixels, tests)
+    std::vector<int> clickAt;          // --click-at FRAME (tests)
     std::string uiPreview;  // --ui-preview MODE: original-UI component preview (src/ui/ui_preview.h)
     FlowOptions flow;
     bool legacy = false;    // any old test flag: start the field/battle directly (no title flow)
@@ -214,11 +233,21 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--flow" && i + 1 < a.size()) flow.stopAt = a[++i];
         else if (a[i] == "--select-set" && i + 1 < a.size()) flow.selectPack = std::stoi(a[++i]);
         else if (a[i] == "--account" && i + 1 < a.size()) flow.account = a[++i];
+        else if (a[i] == "--password" && i + 1 < a.size()) flow.password = a[++i];
         else if (a[i] == "--lobby" && i + 1 < a.size()) flow.lobbyStage = a[++i];
         else if (a[i] == "--slot" && i + 1 < a.size()) flow.slot = std::stoi(a[++i]);
         else if (a[i] == "--flow-event" && i + 1 < a.size()) dbg.flowEvent = a[++i];
         else if (a[i] == "--flow-pos" && i + 2 < a.size()) { dbg.flowX = std::stoi(a[i + 1]); dbg.flowY = std::stoi(a[i + 2]); i += 2; }
         else if (a[i] == "--save-dir" && i + 1 < a.size()) Story::setSaveDir(fs::path(a[++i]));
+        else if (a[i] == "--window" && i + 2 < a.size()) { winReqW = std::stoi(a[i + 1]); winReqH = std::stoi(a[i + 2]); i += 2; }
+        else if (a[i] == "--scale" && i + 1 < a.size()) scaleArg = a[++i];
+        else if (a[i] == "--no-wide") noWide = true;
+        else if (a[i] == "--lowres") lowRes = true;
+        else if (a[i] == "--nearest") nearest = true;
+        else if (a[i] == "--crt") crt = true;
+        else if (a[i] == "--msaa" && i + 1 < a.size()) msaaArg = std::stoi(a[++i]);
+        else if (a[i] == "--mouse" && i + 2 < a.size()) { mouseX = std::stoi(a[i + 1]); mouseY = std::stoi(a[i + 2]); i += 2; }
+        else if (a[i] == "--click-at" && i + 1 < a.size()) clickAt.push_back(std::stoi(a[++i]));
     }
     legacy = dbg.stageGiven || dbg.newGame || dbg.noStory || dbg.startBattle || !dbg.storyEvent.empty() ||
              !dbg.storyFlags.empty() || dbg.posX >= 0;
@@ -236,6 +265,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         return 1;
     }
 
+    makeDpiAware();
+    const bool shotRun = !shotPath.empty();
+    if (winReqW > 0 && winReqH > 0) { g_winW = winReqW; g_winH = winReqH; }
+    if (shotRun) g_fixedSize = true;  // compose off-screen at exactly g_winW x g_winH
     WNDCLASSA wc{};
     wc.style = CS_OWNDC;
     wc.lpfnWndProc = wndProc;
@@ -243,7 +276,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.lpszClassName = "DMW3PC";
     RegisterClassA(&wc);
-    RECT r{0, 0, g_winW, g_winH};
+    RECT r{0, 0, shotRun ? 320 : g_winW, shotRun ? 240 : g_winH};
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     HWND hwnd = CreateWindowA("DMW3PC", "Digimon World 3 - PC Edition (demo)", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                               CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr,
@@ -260,6 +293,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     if (auto swap = reinterpret_cast<SwapFn>(reinterpret_cast<void*>(wglGetProcAddress("wglSwapIntervalEXT"))))
         swap(1);
     gfx::initText(dc);
+    gfx::setOffscreenPresent(shotRun);
     loadXInput();
 
     int exitCode = 0;
@@ -285,6 +319,18 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
             MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - load error", MB_ICONERROR);
             g_running = false;
             exitCode = 1;
+        }
+        {  // command-line video overrides (tests); the Options screen saves the player's own choice
+            VideoOptions vo = gfx::videoOptions();
+            if (scaleArg == "fit") vo.scale = ScaleMode::Fit;
+            else if (scaleArg == "stretch") vo.scale = ScaleMode::Stretch;
+            else if (scaleArg == "integer") vo.scale = ScaleMode::Integer;
+            if (noWide) vo.wide = false;
+            if (lowRes) vo.hiRes = false;
+            if (nearest) vo.sharp = false;
+            if (crt) vo.crt = true;
+            if (msaaArg >= 0) vo.msaa = msaaArg;
+            gfx::setVideoOptions(vo);
         }
         bool isFullscreen = false;
         WINDOWPLACEMENT savedPlace{sizeof(WINDOWPLACEMENT)};
@@ -363,7 +409,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                 in.camTurn = h.camTurn; in.camTilt = h.camTilt;
                 in.wheel = g_wheel; g_wheel = 0;
                 POINT pt;
-                if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) gfx::toVirtual(pt.x, pt.y, in.mx, in.my);
+                if (mouseX >= 0) {
+                    gfx::toVirtual(mouseX, mouseY, in.mx, in.my);
+                    for (int f : clickAt) {
+                        if (frame == f) { in.lmb = in.lmbP = true; }
+                        if (frame == f + 1) in.lmbR = true;
+                    }
+                } else if (focused && GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
+                    gfx::toVirtual(pt.x, pt.y, in.mx, in.my);
+                }
                 prev = h;
                 if (preview) preview->update(in.confirmP);
                 else if (legacy) game.update(in);
@@ -391,6 +445,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
             if (preview) preview->render(g_winW, g_winH);
             else if (legacy) game.render(g_winW, g_winH);
             else app.render(g_winW, g_winH);
+            gfx::endFrame();
             ++frame;
             if (!shotPath.empty() && frame >= shotFrames) {
                 glFinish();
@@ -401,6 +456,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         }
         if (legacy) ui::shutdown();
         else if (!preview) app.shutdown();
+        gfx::shutdown();
     }  // Game (and its textures) destroyed while the GL context is still current
 
     wglMakeCurrent(nullptr, nullptr);

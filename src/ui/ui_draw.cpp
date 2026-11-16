@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "render/gl_renderer.h"
+
 namespace dw3::ui {
 
 namespace {
@@ -87,6 +89,7 @@ void shutdown() {
 }
 
 void fillRect(float x, float y, float w, float h, uint32_t c) {
+    gfx::coverView(x, w, y, h);  // a whole-screen fill covers the wide view too
     glDisable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     setBlend(Blend::Normal);

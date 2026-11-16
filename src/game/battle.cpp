@@ -871,7 +871,18 @@ void Battle::updateCamera(const Input* in, bool snap) {
     cam_.update();
 }
 
-void Battle::update(const Input& in) {
+void Battle::update(const Input& rawIn) {
+    Input in = rawIn;
+    // Mouse: the command window lines are buttons (hover = cursor, left click = use the move); a click also
+    // turns the pages of the fight report.
+    {
+        const int cmd = result_.active() ? -1 : hud_.commandAt(in.mx, in.my);
+        hud_.setHover(cmd);
+        if (in.lmbP && cmd == 0) in.atk1P = true;
+        if (in.lmbP && cmd == 1) in.atk2P = true;
+        if (in.lmbP && cmd == 2) in.atk3P = true;
+        if (in.lmbP && result_.active()) in.confirmP = true;
+    }
     ++ticks_;
     if (result_.active()) {  // post-battle fight report
         result_.update(in.confirmP);
@@ -1055,7 +1066,8 @@ void Battle::render() {
     // the bottom of the screen darker so the button panel reads
     for (int i = 0; i < 8; ++i) {
         const float k = float(8 - i) / 8.f;
-        gfx::fillRect(0, kScreenH - float(i + 1) * 5.f, kScreenW, 5.f, rgba(0, 0, 0, uint8_t(110 * k * k)));
+        gfx::fillRect(gfx::viewLeft(), kScreenH - float(i + 1) * 5.f, gfx::viewRight() - gfx::viewLeft(), 5.f,
+                      rgba(0, 0, 0, uint8_t(110 * k * k)));
     }
     // digivolution light pillar around whoever digivolves
     if (seq_.active) {

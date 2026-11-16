@@ -57,6 +57,9 @@ public:
     void render(int windowW, int windowH);
 
 private:
+    // Mouse in the field (one place): a click advances story dialogue; otherwise it sets a walk target and the
+    // player walks there (keyboard input or getting stuck cancels it). Rewrites `in` with the directions.
+    void mouseInField(Input& in);
     enum class Mode { Field, ToBattle, Battle, ToField };
     SpriteCache sprites_;
     ModelCache models_;
@@ -71,6 +74,10 @@ private:
     BattleRequest pending_;
     std::string error_;
     DebugOptions dbg_;
+    bool walkTo_ = false;              // click-to-walk target active
+    float walkX_ = 0, walkY_ = 0;      // target (map pixels)
+    int walkStuck_ = 0, walkLastX_ = 0, walkLastY_ = 0;
+    std::string walkStage_;
 };
 
 }  // namespace dw3

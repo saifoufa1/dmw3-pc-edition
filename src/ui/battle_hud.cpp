@@ -37,6 +37,12 @@ void BattleHud::setCommands(const HudCommand* cmds, int count) {
     cmds_.assign(cmds, cmds + std::max(0, count));
 }
 
+int BattleHud::commandAt(float x, float y) const {
+    if (!visible_ || cmds_.empty() || x < kCmdX + 2 || x >= kCmdX + kCmdW - 2) return -1;
+    const int i = int(std::floor((y - (kCmdY + 7)) / 16.f));
+    return y >= kCmdY + 7 && i >= 0 && i < int(cmds_.size()) ? i : -1;
+}
+
 void BattleHud::update() {
     ++ticks_;
     const float target[2] = {float(partner_.hp), float(enemy_.hp)};
@@ -94,9 +100,12 @@ void BattleHud::render() const {
         drawWindow(kCmdX, kCmdY, kCmdW, kCmdH, WindowStyle::Battle);
         const float lineH = 16;
         float y = kCmdY + 9;
-        for (const HudCommand& c : cmds_) {
+        for (size_t i = 0; i < cmds_.size(); ++i) {
+            const HudCommand& c = cmds_[i];
             const bool ready = c.available && c.cooldown <= 0.f;
-            if (c.pressed) drawCursor(kCmdX + 6, y, ticks_);
+            const bool hover = int(i) == hover_;
+            if (hover) fillRect(kCmdX + 4, y - 2, kCmdW - 8, 15, 0x50ffc080u);  // mouse over this move
+            if (c.pressed || hover) drawCursor(kCmdX + 6, y, ticks_);
             const uint32_t col = c.pressed ? kYellow : ready ? kWhite : kGrey;
             drawTextFit(kCmdX + 16, y, c.name, float(kCmdW - 16 - 48), col);
             if (c.mp > 0) drawTextRight(kCmdX + kCmdW - 24, y + 3, num(c.mp), ready ? kWhite : kGrey, UiFont::Small);

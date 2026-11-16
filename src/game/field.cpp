@@ -487,12 +487,13 @@ void Field::updatePartner(float speed) {
 }
 
 void Field::updateCamera() {
-    auto clampCam = [](float c, int view, int size) {
-        if (size <= view) return -float(view - size) / 2;
-        return std::clamp(c, 0.f, float(size - view));
+    // lo..hi = the visible virtual range relative to the camera (wider than 0..320 on a wide frame).
+    auto clampCam = [](float c, float lo, float hi, int size) {
+        if (float(size) <= hi - lo) return float(size) / 2.f - (lo + hi) / 2.f;
+        return std::clamp(c, -lo, float(size) - hi);
     };
-    camX_ = clampCam(player_.x - kScreenW / 2.f, kScreenW, stage_.image.w);
-    camY_ = clampCam(player_.y - kScreenH / 2.f - 16, kScreenH, stage_.image.h);
+    camX_ = clampCam(player_.x - kScreenW / 2.f, gfx::viewLeft(), gfx::viewRight(), stage_.image.w);
+    camY_ = clampCam(player_.y - kScreenH / 2.f - 16, 0.f, float(kScreenH), stage_.image.h);
 }
 
 void Field::update(const Input& in) {
@@ -776,7 +777,7 @@ void Field::render() {
         const PieceTex* pt = pieceTex(a.pieces[a.cur]);
         if (!pt) continue;
         const float x = float(a.x + pt->ox) - camX_, y = float(a.y + pt->oy) - camY_;
-        if (x > kScreenW || y > kScreenH || x + pt->tex.w < 0 || y + pt->tex.h < 0) continue;
+        if (x > gfx::viewRight() || y > kScreenH || x + pt->tex.w < gfx::viewLeft() || y + pt->tex.h < 0) continue;
         if (a.additive) gfx::drawSprite(pt->tex, x, y, false, 1.f, 0xffffffffu, true);
         else gfx::drawTexture(pt->tex, x, y);
     }

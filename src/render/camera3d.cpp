@@ -25,7 +25,8 @@ void Camera3D::begin() const {
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
     glLoadIdentity();
-    const double h = zNear * std::tan(fovY * 0.5), w = h * double(kScreenW) / double(kScreenH);
+    // Same vertical field of view; a wide frame (gfx::viewLeft..viewRight) shows more to the sides.
+    const double h = zNear * std::tan(fovY * 0.5), w = h * double(gfx::viewRight() - gfx::viewLeft()) / double(kScreenH);
     glFrustum(-w, w, -h, h, zNear, zFar);
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();

@@ -87,7 +87,7 @@ void drawModel(const Model& m, const ModelGpu& gpu, const Pose& pose, const Mode
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
     glLoadIdentity();
-    glOrtho(0, kScreenW, kScreenH, 0, -100000, 100000);
+    glOrtho(gfx::viewLeft(), gfx::viewRight(), kScreenH, 0, -100000, 100000);
     glMatrixMode(GL_MODELVIEW);
     glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);

@@ -37,6 +37,17 @@ const char* kMenuLabels[] = {"New Game", "Continue", "Options", "Quit"};
 
 constexpr int kDoneTicks = 70;  // "downloading" / "logging in" pause before the next screen
 
+constexpr int kVkF4 = 0x73, kVkF11 = 0x7A;
+constexpr int kOptCount = 8;      // Options items (the last one is Back)
+constexpr float kOptW = 196;      // Options window width
+const char* kPauseItems[] = {"Resume", "Save", "Options", "Return to Title", "Quit Game"};
+constexpr int kPauseCount = 5;
+
+bool inRect(float mx, float my, float x, float y, float w, float h) { return mx >= x && my >= y && mx < x + w && my < y + h; }
+
+// Sign-up: the show/hide button right of the password box.
+constexpr float kEyeX = 238, kEyeW = 36;
+
 void stroke(float x, float y, float w, float h, uint32_t c) {
     ui::fillRect(x, y, w, 1, c);
     ui::fillRect(x, y + h - 1, w, 1, c);
@@ -217,15 +228,31 @@ void App::loadOptions() {
     std::ifstream f(baseDir_ / "options.cfg");
     std::string k;
     int v = 0;
-    while (f >> k >> v)
+    VideoOptions vo;
+    while (f >> k >> v) {
         if (k == "fullscreen") fullscreen_ = v != 0;
+        else if (k == "scale") vo.scale = ScaleMode(std::clamp(v, 0, 2));
+        else if (k == "widescreen") vo.wide = v != 0;
+        else if (k == "hires") vo.hiRes = v != 0;
+        else if (k == "sharp") vo.sharp = v != 0;
+        else if (k == "msaa") vo.msaa = v;
+        else if (k == "crt") vo.crt = v != 0;
+    }
+    gfx::setVideoOptions(vo);
 }
 
 void App::saveOptions() const {
     std::error_code ec;
     fs::create_directories(baseDir_, ec);
     std::ofstream f(baseDir_ / "options.cfg");
-    f << "fullscreen " << (fullscreen_ ? 1 : 0) << "\n";
+    const VideoOptions& vo = gfx::videoOptions();
+    f << "fullscreen " << (fullscreen_ ? 1 : 0) << "\n"
+      << "scale " << int(vo.scale) << "\n"
+      << "widescreen " << (vo.wide ? 1 : 0) << "\n"
+      << "hires " << (vo.hiRes ? 1 : 0) << "\n"
+      << "sharp " << (vo.sharp ? 1 : 0) << "\n"
+      << "msaa " << vo.msaa << "\n"
+      << "crt " << (vo.crt ? 1 : 0) << "\n";
 }
 
 void App::go(State s) {
@@ -245,7 +272,8 @@ void App::go(State s) {
             break;
         case State::SignUp:
             name_ = flow_.account.empty() && (flow_.stopAt == "pack" || flow_.stopAt == "newgame") ? "Tamer" : flow_.account;
-            pass_.clear();
+            pass_ = flow_.password;
+            showPass_ = false;
             field_ = 0;
             gridX_ = gridY_ = 0;
             signError_ = false;
@@ -322,6 +350,13 @@ void App::startContinue() {
 void App::update(const Input& in) {
     ++ticks_;
     ++stateTicks_;
+    mouseMoved_ = in.mx != lastMx_ || in.my != lastMy_;
+    lastMx_ = in.mx;
+    lastMy_ = in.my;
+    if (in.keyP[kVkF11]) {  // borderless fullscreen toggle, anywhere
+        fullscreen_ = !fullscreen_;
+        saveOptions();
+    }
     switch (state_) {
         case State::Title: updateTitle(in); break;
         case State::MainMenu: updateMenu(in); break;
@@ -344,7 +379,7 @@ void App::update(const Input& in) {
 }
 
 void App::updateTitle(const Input& in) {
-    if (stateTicks_ > 10 && (in.confirmP || in.keyP[kVkReturn])) go(State::MainMenu);
+    if (stateTicks_ > 10 && (in.confirmP || in.keyP[kVkReturn] || in.lmbP)) go(State::MainMenu);
 }
 
 void App::updateMenu(const Input& in) {
@@ -352,7 +387,13 @@ void App::updateMenu(const Input& in) {
     if (in.up && !prevUp_) menuSel_ = (menuSel_ + n - 1) % n;
     if (in.down && !prevDown_) menuSel_ = (menuSel_ + 1) % n;
     if (in.keyP[kVkEscape]) { go(State::Title); return; }
-    if (!(in.confirmP || in.keyP[kVkReturn]) || stateTicks_ < 5) return;
+    bool click = false;
+    for (int i = 0; i < n; ++i)  // mouse: the plates
+        if (inRect(in.mx, in.my, style::kPlateX, style::kPlateY + style::kPlateStep * float(i), 164, 16)) {
+            if (mouseMoved_) menuSel_ = i;
+            if (in.lmbP) { menuSel_ = i; click = true; }
+        }
+    if (!(in.confirmP || in.keyP[kVkReturn] || click) || stateTicks_ < 5) return;
     error_.clear();
     switch (menuItems_[size_t(menuSel_)]) {
         case kNewGame: slotsForNew_ = true; go(State::Slots); break;
@@ -366,9 +407,14 @@ void App::updateMenu(const Input& in) {
 // Save slot screen. New Game: any slot (a used one asks before it is overwritten). Continue: used slots only.
 void App::updateSlots(const Input& in) {
     const int n = style::kSlotCount;
-    const bool ok = stateTicks_ > 5 && (in.confirmP || in.keyP[kVkReturn]);
+    bool ok = stateTicks_ > 5 && (in.confirmP || in.keyP[kVkReturn]);
     if (overwriteAsk_) {
         if ((in.left && !prevLeft_) || (in.right && !prevRight_) || (in.up && !prevUp_) || (in.down && !prevDown_)) yes_ = !yes_;
+        for (int b = 0; b < 2; ++b)  // mouse: YES / NO
+            if (inRect(in.mx, in.my, b == 0 ? 96.f : 166.f, 92 + 22, 44, 16)) {
+                if (mouseMoved_) yes_ = b == 0;
+                if (in.lmbP) { yes_ = b == 0; ok = true; }
+            }
         if (in.keyP[kVkEscape] || (ok && !yes_)) { overwriteAsk_ = false; return; }
         if (ok && yes_) {
             std::error_code ec;
@@ -387,7 +433,16 @@ void App::updateSlots(const Input& in) {
     };
     if (in.up && !prevUp_) step(-1);
     if (in.down && !prevDown_) step(1);
-    if (in.keyP[kVkEscape]) { go(State::MainMenu); return; }
+    if (in.keyP[kVkEscape] || in.rmbP) { go(State::MainMenu); return; }
+    {  // mouse: the slot boxes
+        const float x = (kScreenW - style::kSlotW) / 2;
+        for (int i = 0; i < n; ++i)
+            if ((slotsForNew_ || slots_[size_t(i)].used) &&
+                inRect(in.mx, in.my, x, style::kSlotTop + (style::kSlotH + style::kSlotGap) * float(i), style::kSlotW, style::kSlotH)) {
+                if (mouseMoved_) slotSel_ = i;
+                if (in.lmbP && stateTicks_ > 5) { slotSel_ = i; ok = true; }
+            }
+    }
     if (!ok) return;
     const SlotInfo& si = slots_[size_t(slotSel_)];
     if (slotsForNew_) {
@@ -400,16 +455,71 @@ void App::updateSlots(const Input& in) {
     }
 }
 
-void App::updateOptions(const Input& in) {
-    if (in.up && !prevUp_) optSel_ = (optSel_ + 1) % 2;
-    if (in.down && !prevDown_) optSel_ = (optSel_ + 1) % 2;
-    const bool ok = in.confirmP || in.keyP[kVkReturn];
-    if (optSel_ == 0 && (ok || (in.left && !prevLeft_) || (in.right && !prevRight_))) {
-        fullscreen_ = !fullscreen_;
-        saveOptions();
-    } else if ((optSel_ == 1 && ok) || in.keyP[kVkEscape]) {
-        go(State::MainMenu);
+std::vector<std::string> App::optionLabels() const {
+    const VideoOptions& o = gfx::videoOptions();
+    static const char* kScale[] = {"Fit", "Stretch", "Integer"};
+    std::string aa = o.msaa == 0 ? "Off" : std::to_string(o.msaa) + "x";
+    if (gfx::maxMsaa() == 0) aa = "n/a";
+    return {std::string("Display: ") + (fullscreen_ ? "Fullscreen" : "Window"),
+            std::string("Scale: ") + kScale[int(o.scale)],
+            std::string("Widescreen: ") + (o.wide ? "On" : "Off"),
+            std::string("Resolution: ") + (o.hiRes ? "High" : "Original"),
+            std::string("Upscale: ") + (o.sharp ? "Sharp" : "Nearest"),
+            "Anti-aliasing: " + aa,
+            std::string("CRT filter: ") + (o.crt ? "On" : "Off"),
+            "Back"};
+}
+
+// Cycles option `item` by dir (+1 / -1) and saves options.cfg.
+void App::changeOption(int item, int dir) {
+    VideoOptions o = gfx::videoOptions();
+    switch (item) {
+        case 0: fullscreen_ = !fullscreen_; break;
+        case 1: o.scale = ScaleMode((int(o.scale) + 3 + dir) % 3); break;
+        case 2: o.wide = !o.wide; break;
+        case 3: o.hiRes = !o.hiRes; break;
+        case 4: o.sharp = !o.sharp; break;
+        case 5: {
+            static const int kSteps[] = {0, 2, 4, 8};
+            int i = 0;
+            while (i < 3 && kSteps[i] < o.msaa) ++i;
+            const int maxS = gfx::maxMsaa();
+            do i = (i + 4 + dir) % 4; while (kSteps[i] > maxS);
+            o.msaa = kSteps[i];
+            break;
+        }
+        case 6: o.crt = !o.crt; break;
+        default: return;
     }
+    gfx::setVideoOptions(o);
+    saveOptions();
+}
+
+void App::updateOptions(const Input& in) {
+    if (in.up && !prevUp_) optSel_ = (optSel_ + kOptCount - 1) % kOptCount;
+    if (in.down && !prevDown_) optSel_ = (optSel_ + 1) % kOptCount;
+    bool ok = in.confirmP || in.keyP[kVkReturn];
+    const int m = menuWindowItem(kOptCount, kOptW, in.mx, in.my);
+    if (m >= 0 && mouseMoved_) optSel_ = m;
+    if (m >= 0 && in.lmbP) { optSel_ = m; ok = true; }
+    const bool back = in.keyP[kVkEscape] || in.rmbP || (optSel_ == kOptCount - 1 && ok);
+    if (back) {
+        if (optFromPause_ && game_) { go(State::Pause); pauseSel_ = 2; }
+        else go(State::MainMenu);
+        optFromPause_ = false;
+        return;
+    }
+    if (ok || (in.right && !prevRight_)) changeOption(optSel_, 1);
+    else if (in.left && !prevLeft_) changeOption(optSel_, -1);
+}
+
+int App::menuWindowItem(int count, float w, float mx, float my) const {
+    if (w <= 0) w = style::kMenuW;
+    const float h = 30 + style::kMenuLine * float(count);
+    const float x = (kScreenW - w) / 2, y = (kScreenH - h) / 2;
+    for (int i = 0; i < count; ++i)
+        if (inRect(mx, my, x + 6, y + 22 + style::kMenuLine * float(i), w - 12, style::kMenuLine)) return i;
+    return -1;
 }
 
 void App::updateSignUp(const Input& in) {
@@ -452,8 +562,25 @@ void App::updateSignUp(const Input& in) {
     gridX_ = std::min(gridX_, rowLen(gridY_) - 1);
 
     bool submit = in.keyP[kVkReturn];
-    // Grid select: gamepad confirm (Space/Enter on the keyboard type/submit instead).
-    if (in.confirmP && !in.keyP[kVkSpace] && !in.keyP[kVkReturn]) {
+    if (in.keyP[kVkF4]) showPass_ = !showPass_;  // show / hide the password
+    // Mouse: click a box to type into it, the Show/Hide button toggles the password, the grid cells type.
+    bool gridClick = false;
+    if (in.lmbP) {
+        if (inRect(in.mx, in.my, style::kFieldX - 3, style::kNameY - 2, style::kFieldW, 14)) field_ = 0;
+        else if (inRect(in.mx, in.my, style::kFieldX - 3, style::kPassY - 2, style::kFieldW, 14)) field_ = 1;
+        else if (inRect(in.mx, in.my, kEyeX, style::kPassY - 2, kEyeW, 14)) showPass_ = !showPass_;
+    }
+    for (int r = 0; r < kGridRowsN; ++r)
+        for (int c = 0; c < rowLen(r); ++c) {
+            float x = style::kGridX + style::kCellW * float(c), w = style::kCellW;
+            if (r == kGridRowsN - 1 && c == 11) { x += 4; w = 26; }
+            else if (r == kGridRowsN - 1 && c == 12) { x = style::kGridX + style::kCellW * 11.f + 36; w = 20; }
+            if (!inRect(in.mx, in.my, x - 2, style::kGridY + style::kCellH * float(r) - 1, w, style::kCellH)) continue;
+            if (mouseMoved_ || in.lmbP) { gridX_ = c; gridY_ = r; }
+            if (in.lmbP) gridClick = true;
+        }
+    // Grid select: gamepad confirm or a mouse click (Space/Enter on the keyboard type/submit instead).
+    if ((in.confirmP && !in.keyP[kVkSpace] && !in.keyP[kVkReturn]) || gridClick) {
         if (gridY_ == kGridRowsN - 1 && gridX_ == 11) { if (!f.empty()) f.pop_back(); }
         else if (gridY_ == kGridRowsN - 1 && gridX_ == 12) submit = true;
         else if (f.size() < maxLen) f += kGridRows[gridY_][gridX_];
@@ -481,11 +608,16 @@ void App::updatePack(const Input& in) {
         return;
     }
     const bool autoPick = flow_.stopAt == "newgame" && stateTicks_ == 30;
-    const bool ok = (stateTicks_ > 5 && (in.confirmP || in.keyP[kVkReturn])) || autoPick;
+    bool ok = (stateTicks_ > 5 && (in.confirmP || in.keyP[kVkReturn])) || autoPick;
     if (confirm_) {  // "Register account? YES / NO"
         if ((in.left && !prevLeft_) || (in.right && !prevRight_) || (in.up && !prevUp_) || (in.down && !prevDown_))
             yes_ = !yes_;
-        if (in.keyP[kVkEscape]) { confirm_ = false; return; }
+        for (int b = 0; b < 2; ++b)  // mouse: YES / NO
+            if (inRect(in.mx, in.my, style::kTermTextX + (b == 0 ? 10.f : 70.f), style::kConfirmY + 26, 56, 16)) {
+                if (mouseMoved_) yes_ = b == 0;
+                if (in.lmbP) { yes_ = b == 0; ok = true; }
+            }
+        if (in.keyP[kVkEscape] || in.rmbP) { confirm_ = false; return; }
         if (ok || (flow_.stopAt == "newgame" && stateTicks_ == 50)) {
             confirm_ = false;
             if (yes_ || flow_.stopAt == "newgame") { doneTicks_ = kDoneTicks; termStart_ = ticks_; }
@@ -496,6 +628,12 @@ void App::updatePack(const Input& in) {
     if ((in.up && !prevUp_) || (in.left && !prevLeft_)) packSel_ = (packSel_ + n - 1) % n;
     if ((in.down && !prevDown_) || (in.right && !prevRight_)) packSel_ = (packSel_ + 1) % n;
     if (in.keyP[kVkEscape]) { go(State::MainMenu); return; }
+    // Mouse: hover / click the A B C tabs to look at a pack; click the pack panel to choose it.
+    for (int t = 0; t < n && t < 3; ++t)
+        if (inRect(in.mx, in.my, style::kTabX, style::kTabY + style::kTabStep * float(t), style::kTabW, style::kTabH)) {
+            if (mouseMoved_ || in.lmbP) packSel_ = t;
+        }
+    if (in.lmbP && stateTicks_ > 5 && inRect(in.mx, in.my, style::kPackNameX - 4, style::kPackPanelY, 262, 190)) ok = true;
     if (ok) {
         confirm_ = true;
         yes_ = true;
@@ -504,7 +642,7 @@ void App::updatePack(const Input& in) {
 
 void App::updateLogIn(const Input& in) {
     if (doneTicks_ < 0) {  // failed: back to the menu
-        if (in.confirmP || in.keyP[kVkEscape] || in.keyP[kVkReturn]) go(State::MainMenu);
+        if (in.confirmP || in.keyP[kVkEscape] || in.keyP[kVkReturn] || in.lmbP) go(State::MainMenu);
         return;
     }
     if (--doneTicks_ <= 0) startContinue();
@@ -513,9 +651,14 @@ void App::updateLogIn(const Input& in) {
 void App::updatePause(const Input& in) {
     if (pauseMsgTicks_ > 0) --pauseMsgTicks_;
     if (in.keyP[kVkEscape]) { go(State::Playing); return; }
-    if (in.up && !prevUp_) pauseSel_ = (pauseSel_ + 3) % 4;
-    if (in.down && !prevDown_) pauseSel_ = (pauseSel_ + 1) % 4;
-    if (!(in.confirmP || in.keyP[kVkReturn])) return;
+    if (in.up && !prevUp_) pauseSel_ = (pauseSel_ + kPauseCount - 1) % kPauseCount;
+    if (in.down && !prevDown_) pauseSel_ = (pauseSel_ + 1) % kPauseCount;
+    bool ok = in.confirmP || in.keyP[kVkReturn];
+    const int m = menuWindowItem(kPauseCount, 0, in.mx, in.my);
+    if (m >= 0 && mouseMoved_) pauseSel_ = m;
+    if (m >= 0 && in.lmbP) { pauseSel_ = m; ok = true; }
+    if (in.rmbP) { go(State::Playing); return; }
+    if (!ok) return;
     switch (pauseSel_) {
         case 0: go(State::Playing); break;
         case 1:
@@ -523,12 +666,16 @@ void App::updatePause(const Input& in) {
             pauseMsgTicks_ = 120;
             break;
         case 2:
+            optFromPause_ = true;
+            go(State::Options);
+            break;
+        case 3:
             if (game_) game_->save();
             game_.reset();
             menuSel_ = 0;
             go(State::Title);
             break;
-        case 3:
+        case 4:
             if (game_) game_->save();
             state_ = State::Quit;
             break;
@@ -576,11 +723,17 @@ void App::drawTerminal(const std::vector<std::string>& lines, bool typewriter) {
 }
 
 void App::render(int ww, int wh) {
-    if ((state_ == State::Playing || state_ == State::Pause) && game_) {
+    const bool overGame = state_ == State::Playing || state_ == State::Pause || (state_ == State::Options && optFromPause_);
+    if (overGame && game_) {
         game_->render(ww, wh);
-        if (state_ == State::Pause) {
+        if (state_ != State::Playing) {
+            gfx::clearHudText();  // the game's HUD labels stay under the menu
             gfx::beginVirtual();
-            renderPause();
+            if (state_ == State::Pause) renderPause();
+            else {
+                ui::fillRect(0, 0, kScreenW, kScreenH, 0x80000000u);
+                renderOptionsWindow();
+            }
         }
         return;
     }
@@ -633,10 +786,11 @@ void App::renderMenu() {
     if (!error_.empty()) ui::drawTextFit(4, 228, error_, 312, style::kErrorText);
 }
 
-void App::drawMenuWindow(const char* title, const std::vector<std::string>& items, int sel) {
+void App::drawMenuWindow(const char* title, const std::vector<std::string>& items, int sel, float w) {
+    if (w <= 0) w = style::kMenuW;
     const float h = 30 + style::kMenuLine * float(items.size());
-    const float x = (kScreenW - style::kMenuW) / 2, y = (kScreenH - h) / 2;
-    ui::drawWindow(x, y, style::kMenuW, h);
+    const float x = (kScreenW - w) / 2, y = (kScreenH - h) / 2;
+    ui::drawWindow(x, y, w, h);
     ui::drawText(x + 14, y + 8, title, ui::kYellow);
     for (size_t i = 0; i < items.size(); ++i) {
         const float iy = y + 24 + style::kMenuLine * float(i);
@@ -689,12 +843,17 @@ void App::renderSlots() {
 
 void App::renderOptions() {
     drawTitleBg();
-    drawMenuWindow("Options", {std::string("Fullscreen: ") + (fullscreen_ ? "On" : "Off"), "Back"}, optSel_);
+    renderOptionsWindow();
+}
+
+void App::renderOptionsWindow() {
+    drawMenuWindow("Options", optionLabels(), optSel_, kOptW);
+    ui::drawTextFit(8, 226, "Up/Down choose  Left/Right or click: change  F11 fullscreen", 304, style::kTermText);
 }
 
 void App::renderPause() {
     ui::fillRect(0, 0, kScreenW, kScreenH, 0x80000000u);
-    drawMenuWindow("Menu", {"Resume", "Save", "Return to Title", "Quit Game"}, pauseSel_);
+    drawMenuWindow("Menu", std::vector<std::string>(kPauseItems, kPauseItems + kPauseCount), pauseSel_);
     if (pauseMsgTicks_ > 0) {
         const int w = ui::measureText(pauseMsg_);
         ui::drawText((kScreenW - float(w)) / 2, 200, pauseMsg_, ui::kYellow);
@@ -713,12 +872,25 @@ void App::renderSignUp() {
         const bool focus = field_ == idx && doneTicks_ < 0;
         ui::drawText(style::kFieldLabelX, y, label, focus ? style::kTermText : style::kTermDim);
         stroke(style::kFieldX - 3, y - 2, style::kFieldW, 14, focus ? style::kSelEdge : style::kPanelEdge);
-        const std::string shown = secret ? std::string(value.size(), '*') : value;
-        const int w = ui::drawText(style::kFieldX, y, shown, style::kFieldText);
+        // The password is never drawn as text unless the player asked for it (Show button / F4): one '*' per
+        // character, drawn as a small pixel asterisk (the original font has no '*' glyph).
+        int w = 0;
+        if (secret) {
+            static const char* kStar[5] = {"x.x.x", ".xxx.", "xxxxx", ".xxx.", "x.x.x"};
+            for (size_t i = 0; i < value.size(); ++i, w += 7)
+                for (int r = 0; r < 5; ++r)
+                    for (int c = 0; c < 5; ++c)
+                        if (kStar[r][c] == 'x')
+                            ui::fillRect(style::kFieldX + float(w + c), y + 3 + float(r), 1, 1, style::kFieldText);
+        } else {
+            w = ui::drawText(style::kFieldX, y, value, style::kFieldText);
+        }
         if (focus && blink) ui::drawText(style::kFieldX + float(w) + 1, y, "_", style::kFieldText);
     };
     fieldRow(0, style::kNameY, "Account", name_, false);
-    fieldRow(1, style::kPassY, "Password", pass_, true);
+    fieldRow(1, style::kPassY, "Password", pass_, !showPass_);
+    stroke(kEyeX, style::kPassY - 2, kEyeW, 14, style::kPanelEdge);  // show / hide toggle
+    ui::drawText(kEyeX + 3, style::kPassY, showPass_ ? "Hide" : "Show", style::kTermDim);
     for (int r = 0; r < kGridRowsN; ++r)
         for (int c = 0; c < rowLen(r); ++c) {
             const bool last = r == kGridRowsN - 1;
