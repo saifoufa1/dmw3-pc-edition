@@ -12,7 +12,9 @@ namespace {
 // button panel; the top keeps the fighter's head below the HP bars (see clampArena).
 constexpr float kArenaL = 22, kArenaR = 298, kArenaT = 112, kArenaB = 198;
 constexpr float kHudTop = 50;           // fighters' heads stay below this line
-constexpr float kRookieHeightPx = 40;  // on-screen height of a Rookie model; forms grow by EvoStage::scale
+constexpr float kRookieHeightPx = 23;  // on-screen height of a Rookie model; forms grow by EvoStage::scale
+// Heights the technique effect scales were tuned at (Rookie..Mega); effects scale with the form.
+constexpr float kFxTunedH[4] = {40, 58, 76, 96};
 constexpr int kRevertHold = 60;        // hold digivolve this many ticks to go back to Rookie
 
 // Attack button panel (virtual 320x240 coordinates).
@@ -155,7 +157,7 @@ bool Battle::start(const BattleRequest& req, const Texture* backdrop, float bgX,
         foe_.scale = foe_.heightPx / 35.f;  // keeps the AI's reach/spacing in proportion
         foe_.yaw = yawFor(-1, -0.3f);
         foeEffect_ = d.effect;
-        foeEffectScale_ = d.effectScale * foe_.heightPx / kRookieHeightPx;
+        foeEffectScale_ = d.effectScale * foe_.heightPx / kFxTunedH[0];
         foeEvoModel_ = d.evoModel;
         foeEvoName_ = d.evoName;
         foeEvoEffect_ = d.evoEffect;
@@ -384,19 +386,19 @@ void Battle::resolvePlayerAttack() {
         const int k = f.hitsDone++;
         switch (atk.fx) {
             case AtkFx::Shot:
-                fireShot(f, foe_, atk.dmg * pw, 3.8f, atk.size * std::sqrt(f.scale), 0, atk.color, 0);
-                attachFx(shots_.back(), atk.effect, atk.effectScale);
+                fireShot(f, foe_, atk.dmg * pw, 3.8f, atk.size * std::sqrt(f.model ? f.heightPx / 40.f : f.scale), 0, atk.color, 0);
+                attachFx(shots_.back(), atk.effect, atk.effectScale * me_.heightPx / kFxTunedH[std::clamp(me_.evo, 0, 3)]);
                 break;
             case AtkFx::Orb:
                 fireShot(f, foe_, atk.dmg * pw, 2.8f, atk.size, 0, atk.color, 0);
-                attachFx(shots_.back(), atk.effect, atk.effectScale);
+                attachFx(shots_.back(), atk.effect, atk.effectScale * me_.heightPx / kFxTunedH[std::clamp(me_.evo, 0, 3)]);
                 burst(f.cx(), f.cy() - f.bodyH() * 0.15f, atk.color, 12, 2.f);
                 break;
             case AtkFx::Spread: {
                 const int n = int(f.hitTicks.size());
                 const float off = n > 1 ? (float(k) - (n - 1) / 2.f) * 0.2f : 0.f;
-                fireShot(f, foe_, atk.dmg * pw, 3.4f, atk.size * std::sqrt(f.scale), off, atk.color, 0);
-                attachFx(shots_.back(), atk.effect, atk.effectScale);
+                fireShot(f, foe_, atk.dmg * pw, 3.4f, atk.size * std::sqrt(f.model ? f.heightPx / 40.f : f.scale), off, atk.color, 0);
+                attachFx(shots_.back(), atk.effect, atk.effectScale * me_.heightPx / kFxTunedH[std::clamp(me_.evo, 0, 3)]);
                 break;
             }
             case AtkFx::Melee:
@@ -467,7 +469,7 @@ void Battle::applyFoeEvo() {
     foe_.power *= 1.35f;
     foe_.scale = seq_.toH / 35.f;
     foeEffect_ = foeEvoEffect_;
-    foeEffectScale_ = foeEvoEffectScale_;
+    foeEffectScale_ = foeEvoEffectScale_ * seq_.toH / kFxTunedH[1];
     setClip(foe_, kClipIdle, 0.6f, true);
 }
 
