@@ -108,6 +108,24 @@ bool loadStageOverlay(ByteView v, StageOverlay& out, std::string* err) {
             out.actors.push_back(a);
         }
     }
+    // +0x14: area links (warps / event zones), 24-byte records, ended by kind 0 with no condition.
+    if (out.has[0x14 / 4] && out.desc[0x14 / 4] && addrToOff(v, out.desc[0x14 / 4], 24, p)) {
+        for (int n = 0; n < 64 && v.has(p, 24); ++n, p += 24) {
+            uint16_t w[12];
+            for (int k = 0; k < 12; ++k) v.u16(p + size_t(k) * 2, w[k]);
+            if (w[4] == 0 && w[5] == 0) break;
+            OverlayLink l;
+            if (w[0] != 0xFFFF) l.cond.push_back({w[0], w[1]});
+            if (w[2] != 0xFFFF) l.cond.push_back({w[2], w[3]});
+            l.kind = w[4];
+            l.arg = w[5];
+            l.x = int16_t(w[6]);
+            l.y = int16_t(w[7]);
+            l.dir = w[8];
+            l.link = w[9];
+            out.links.push_back(std::move(l));
+        }
+    }
     out.ok = true;
     return true;
 }

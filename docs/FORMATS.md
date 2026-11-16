@@ -84,7 +84,7 @@ Level 1 = 4 × u8 children, levels 2–4 = 4 × u16 children (order TL, TR, BL, 
 (128 → 64 → 32 → 16 → 8). Child/node index 0 = an all-zero block. Verified on S200/S202/S218 by overlaying on the map.
 - Walk map values: `0` blocked, `1` floor, `6` stairs (other small values: floor variants, open).
 - Trigger map values: `(type << 5) | index`; type 1 = map edge exit, type 3/5 = doors and links (seen on S200/S202/S218).
-  **Open:** the destination of each trigger is not in TMPK (it is in the WSTAG overlay code or the main executable).
+  The destination of each zone is in the WSTAG **area link table** (desc +0x14, below): `value & 31` = the record index.
 Other TMPK sections (animation timing, contain the 0x1802 marker) are not decoded.
 
 ## PRO/WSTAG###.PRO — stage overlays — partial (236/237 parsed)
@@ -99,7 +99,7 @@ stop at `jr ra`) to recover it without an emulator. WSTAG260 has another layout 
 |---|---|---|
 | +0x08, +0x0C (hi16), +0x1C | file ids (MASK/TMPK/PACK, order unresolved) | low |
 | +0x10 | pointer to the **scene-object list** | verified (S200/S202/S218) |
-| +0x14 | intro cutscene cast table | low |
+| +0x14 | **area link table** (doors / exits / event zones, below) | high (S200/S210/S220/S225/S230 match the reference run) |
 | +0x20 / +0x24 | runtime lists / callbacks | low |
 | +0x28 | VRAM sprite slots, 16 bytes each | medium |
 | +0x2C / +0x30 | player spawn, 8.8 fixed point (S200 = 1000,236) | high |
@@ -122,16 +122,19 @@ mode 0 = static, mode 1 = cycle frames loopFrom..loopTo, mode 2 = frame + k (hyp
 | +0x0A | i16 | slot (several records share a slot: one per story state) |
 | +0x0C/+0x0E | i16 | x, y (map pixels, feet) → actor +0x50/+0x54 (<<8) |
 | +0x10 | i16 | dir → actor +0x60 |
-charId is **not** the `P###` sprite number (char 57 speaks as "Tamer Genji", an old man, but P057 is a soldier;
-char 46 is "Mika"). The creator maps charId through the callbacks at stage descriptor +0x74/+0x78 — open.
+charId is **not** the `P###` sprite number: see the FIELDSTG character table below.
+
+**Creation rule** (FIELDSTG loop 0x8008A7CC): EVERY record whose show list holds is created (not only the first of
+its slot); charId 1 (the player), 0x6A, 0x146 and 0x147 are skipped. So the story phase flags are **exclusive**: when
+the game sets `6004` it clears `6002`, otherwise both lobby phases would appear at once. Records at (0,0) are placed
+later by an event script.
 
 **Flag list** (conditions and assignments): `{u16 flag, u16 value}` pairs ended by `flag = 0xFFFF`. A condition
 list holds when every `flag == value`. Flags look like `0xGGBB` (group, bit): story-phase flags `0x60xx/0x70xx`
 (e.g. `6004` = first visit of Asuka City, then `600c`, `600e`, `7015`, ...), event flags `0x1Axx`, `0x72xx`...
-In WSTAG210 (Main Lobby) every slot lists its variants in story order and the first variant whose list holds is
-the one shown: `6002` = lobby before the partner download, `6004` = after it (two Digimon NPCs appear next to the
-floor mark only with `6004`). Phase flags look cumulative (earlier ones stay set). Medium confidence (observed
-from the tables and the reference playthrough, not from the creator code).
+In WSTAG210 (Main Lobby) every slot lists its variants in story order: `6002` = lobby before the partner download,
+`6004` = after it (Teddy = char 178 `P012MINT` and Kail = char 179 `P014TAKT` appear next to the floor mark only with
+`6004`). Phase flags are exclusive (see the creation rule; an earlier note here said "cumulative": wrong).
 Flags `< 0x0100` (e.g. `0000`, `0010`, `0011`) are used like per-NPC "talked before" flags — medium confidence;
 the engine keeps them per stage+slot.
 
@@ -141,10 +144,55 @@ the engine keeps them per stage+slot.
 (S200–S219) uses `USTALK00.BIN` (all ids and speakers match) — how a stage selects its talk bank is open.
 `dw3check --dump-text S200` prints every actor, its conditions and the resolved lines (console only).
 
-**Still not decoded:** trigger destinations (exits/doors), charId → sprite mapping, which code plays the
-`USDMG###` event blocks (cutscene table at +0x14 / callbacks at +0x20/+0x24 are the candidates), talk bank selection.
-**Decision:** our `data/stages/*.stage` files hold exits/NPC lines (hand-written); `walls original` makes the game use the
-decoded walk map; stages without a .stage file get decoded spawn + event actors automatically (talk NPCs, no lines).
+**Area link table** (desc +0x14) — high confidence: 24-byte records, the table ends at a record with kind 0 and arg 0.
+| off | type | meaning |
+|---|---|---|
+| +0x00/+0x02 | u16, u16 | condition 1: flag, value (`0xFFFF` = none) — the link works only while it holds |
+| +0x04/+0x06 | u16, u16 | condition 2 (same) |
+| +0x08 | u16 | kind: **1 = warp**, 8 = event zone (arg = event id, run by the stage's event code), 7 = seen once (S202), open |
+| +0x0A | u16 | warp: the target **stage key** (`0x200 + n`, see the FIELDSTG stage table) |
+| +0x0C/+0x0E | i16 | warp: arrival x, y in the target stage (map px) |
+| +0x10 | u16 | warp: facing on arrival |
+| +0x12 | u16 | warp: the door scene object to open (scene object `link` 0x64.., 0 = none) |
+| +0x14 | u16×2 | padding |
+A trigger zone with value `v` (TMPK trigger map) uses record `v & 31`. At runtime the arrival goes to desc +0x64/+0x68.
+Every warp of S200/S210/S220/S225/S230 is symmetric: its arrival point lies inside the zone of the matching door
+back (checked by `dmw3 --door-test`). The lobby's lower-right walkway (0xE1) leads to S220, and S220 to S200.
+
+**Scene objects as foreground / doors:** objects with flags `0x400` and a `depthY` line are foreground pieces (counter
+fronts, railings): drawn in depth order with the actors (actor feet below the line = in front). Objects with
+`link >= 0x64` and flags `0x640` are the door panels a warp opens (S210: obj 38 link 0x64 = Login Room door).
+
+## FIELDSTG.PRO tables (loaded at `0x80082448`) — high confidence (`src/formats/fieldstg.*`)
+- **Character table** at `0x80099134`: 393 × u32, index = event actor charId. hi16 = the sprite's **file id**,
+  lo16 = unknown. Read by the creator callback desc +0x74 = `0x80091398`. File id 0 → no sprite (an invisible actor,
+  e.g. S210 chars 112/113 at the counter: the engine keeps them as solid blockers).
+- **Collision size** at `0x80099758`: one byte per charId (32 for most people → radius ~16), callback desc +0x78.
+- **Stage table** at `0x800998E4`: 12-byte records `{u32 key (0x200 + i), u32 WSTAG file id, u32 ptr}`.
+  Stage keys: S200 = 0x200, S210 = 0x203, S220 = 0x206, S225 = 0x207, S230 = 0x208 (the key is not the S number).
+
+## File ids — high confidence
+The executable `SLUS_014.36` (USA) holds a u32 **LBA per file id** at file offset `0x35378` (RAM `0x80044B78`).
+`dw3check --map-file-ids DISC.cue data/file_ids.cfg` reads it from the raw disc and names each id by matching the
+file's first 2048-byte sector against the extracted files: `data/file_ids.cfg` = `0xID PATH` lines (names only,
+2180 ids). It is committed (it needs the raw disc to rebuild).
+
+## Our extracted tables: `data/npcs/S###.npc` and `data/doors/S###.door` (generated, not in git)
+`dw3check --extract-npcs data [S210 ...]` writes them from the player's own game data (`build.bat` runs it when
+`data/npcs` is missing). `dw3check --dump-npcs S210` prints one stage. Flags hex, values decimal, one line per record:
+```
+npc SLOT CHAR SPRITE X Y DIR [show F=V,F=V] [talk COND/SET/0xMSG]...   SPRITE "-" = no sprite (invisible blocker)
+door N warp STAGE X Y DIR [link 0xNN] [if F=V,..]                     N = record index = trigger value & 31
+door N event 0xID [if F=V,..]
+door N kind K 0xARG X Y DIR                                           other kinds, kept raw
+```
+COND / SET are flag lists (`-` = empty). The field places NPCs **only** from the .npc table (plus story actors that
+name an original slot: `actor ID STAGE talk slot N "Name" ...` in data/story/*.story) and uses the .door table for
+the stage's trigger zones; `.stage` exits are used only by stages without a .door table (e.g. our forest S400).
+The format is line based so a database import later is a plain parse.
+
+**Still not decoded:** which code plays the `USDMG###` event blocks (event zones kind 8, callbacks +0x20/+0x24),
+link kind 7, talk bank selection, the original door arrow / beam / port effects (ours are drawn by the engine).
 
 
 ## Battle model (`DAT/MODEL/M###XXXX.BIN`)

@@ -21,6 +21,8 @@ add_library(dw3formats STATIC
   src/formats/stage_pack.cpp
   src/formats/field_stage.cpp
   src/formats/stage_overlay.cpp
+  src/formats/fieldstg.cpp
+  src/formats/stage_tables.cpp
   src/formats/dw3_text.cpp
   src/formats/ui_sheet.cpp
   src/formats/model.cpp
@@ -28,7 +30,7 @@ add_library(dw3formats STATIC
 target_include_directories(dw3formats PUBLIC src)
 
 # --- Asset checker / dumper (console) ---
-add_executable(dw3check tools/dw3check.cpp)
+add_executable(dw3check tools/dw3check.cpp tools/npc_extract.cpp)
 target_link_libraries(dw3check PRIVATE dw3formats)
 
 # --- The game (Windows first; platform layer is isolated in src/platform) ---

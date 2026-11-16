@@ -22,5 +22,8 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 :build
 cmake -S "%~dp0." -B "%~dp0build" -G Ninja -DCMAKE_BUILD_TYPE=%CONFIG% || exit /b 1
 cmake --build "%~dp0build" || exit /b 1
+rem NPC and door tables come from the player's own game data (never in git): extract them once.
+if not exist "%~dp0data\npcs\S210.npc" "%~dp0build\dw3check.exe" --extract-npcs "%~dp0data" >nul
+if not exist "%~dp0data\npcs\S210.npc" echo NOTE: data\npcs not extracted - run: build\dw3check.exe --extract-npcs data
 echo.
 echo Built: %~dp0build\dmw3.exe  and  %~dp0build\dw3check.exe

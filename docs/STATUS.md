@@ -3,7 +3,7 @@
 This file says **what is being worked on right now**, so any assistant (Claude, DeepSeek, or a human) can pick up the work if the current one stops (for example when its token limit runs out).
 Rule for every assistant: **update this file in the same commit as your work**. Say what you finished, what is half-done, and the exact next step.
 
-Last updated: 2026-11-16 by Claude (coordinator).
+Last updated: 2026-11-16 by Claude (field agent).
 
 ## Branches
 | Branch | What | State |
@@ -14,16 +14,31 @@ Last updated: 2026-11-16 by Claude (coordinator).
 ## Owner's bug list from the 2026-11-16 play test (what is being fixed now)
 
 ### Field work — on `main`
-1. **NPCs are wrong.**
-   - Problem: positions and sprites don't match the original, and the Tamer Service clerk is misplaced, so the owner could not download their partners.
-   - Fix: extract the NPCs from the disc's WSTAG/stage overlay actor tables (position, facing, sprite id, talk script id, show conditions), dump them with `dw3check --dump-npcs S210`, and write them to `data/npcs/S###.npc`. Place NPCs **only** from that data. A database comes later (owner: "first extract them").
-2. **Doors lead to wrong places.**
-   - Fix: every door must be symmetric (A→B arrives at B's matching door, and B→A comes back). Add a test that walks every door both ways.
-   - Rooms: S210 Main Lobby ↔ S225 Login Room (zone 0xA2), S230 Arena Front Desk (0xA3), S200 Central Sector (0xE1 ↔ 0xA5). 0xA4/0x65 are unknown.
-3. **Door interaction like the original:** at a door, a red arrow bubble appears over the player, and **U or Enter** goes through.
-4. **Keys:** U / Enter = talk and confirm everywhere (Space still works too). Esc = back.
-5. **Animations:** a door-enter transition (area-card wipe), and teleport ports that open when stepped on or when Enter is pressed.
-6. Test runs open the game window topmost (done: commit a6b73d1).
+Owner's list: (1) NPCs from the disc data, Tamer Service clerk in the right place; (2) symmetric doors + a both-ways
+door test; (3) red arrow bubble at a door, U/Enter goes through; (4) U/Enter = talk/confirm everywhere, Esc (and
+Backspace) = back; (5) door transition + teleport port animation; (6) topmost test window (done: a6b73d1).
+
+**Why it was wrong:** NPC sprites used `charId & 0xFF` as the `P###` number (wrong: charId indexes a FIELDSTG table
+of file ids), extra story NPCs were hand-placed on top, and every door target was hand-picked (the lobby's lower-right
+walkway really leads to S220, not S200). The original data has all of it: see docs/FORMATS.md "Area link table",
+"FIELDSTG.PRO tables", "File ids".
+
+**Done**
+- Extraction (commit `COMMIT1`): `dw3check --dump-npcs S210`, `--extract-npcs data`, `--map-file-ids`;
+  `data/file_ids.cfg` (names only, committed); `data/npcs/S###.npc` + `data/doors/S###.door` are generated from the
+  player's own game data by `build.bat` (git-ignored, never pushed). dw3check checks every warp target exists.
+
+**Half-done (in the working tree of the field agent, not committed yet)**
+- `src/game/field.cpp/.h`: NPCs only from data/npcs, doors from data/doors via trigger zones, arrow bubble, U/Enter
+  door use, door sequence (door opens -> tile wipe -> area card), ports (`data/ports.cfg`), `Field::doorSelfTest`
+  run by `dmw3 --door-test OUT.txt`. Builds; not yet tested in game.
+- `data/story/chapter1.story`: still has the hand actors (service/teddy/kail/genji) — must switch to
+  `actor ID STAGE talk slot N "Name"` (new syntax in story.cpp) and `gset 6002 0` when 6004 is set.
+- Keys: U added to confirm (win32_main.cpp poll), Backspace = back in app.cpp menus, hint texts.
+
+**Next step:** run `build\dmw3.exe --door-test out.txt` (Field::doorSelfTest in src/game/field.cpp), fix
+failures; then edit data/story/chapter1.story (actors -> original slots: S210 slot 4 = Tamer Service char 32 at
+384,255; S200 Genji = char 57 at 1088,288), then screenshots into C:\DW3_Project\reference\pc\round2\.
 
 ### Graphics/controls work — on `gfx-round2`
 1. **Fit any screen:** resizable window, borderless fullscreen, and Fit / Stretch / Integer scale modes; wide screens show more of the scene. Saved in options.cfg.

@@ -28,3 +28,7 @@ dumps/
 *.obj
 *.pdb
 *.ilk
+
+# Tables extracted from the player's own game data (build.bat / dw3check --extract-npcs data): never in git
+/data/npcs/
+/data/doors/

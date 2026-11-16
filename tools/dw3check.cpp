@@ -7,6 +7,9 @@
 //   dw3check --dump-text DMG200 [block]           print event text (console only, never commit the output)
 //   dw3check --dump-text TALK00 [id]              print NPC talk text
 //   dw3check --dump-text S200                     print a stage's WSTAG actors + talk tables with their lines
+//   dw3check --map-file-ids DISC.cue data/file_ids.cfg   once: original file ids -> extracted names (needs the raw disc)
+//   dw3check --dump-npcs S210                     a stage's NPCs (sprite, position, show flags, talk ids) + area links
+//   dw3check --extract-npcs data [S210 ...]       write data/npcs/S###.npc + data/doors/S###.door (all stages if none)
 //   dw3check --dump-arena 1001 out.bmp [yaw] [pitch] [dist]  render a 3D battle arena (MEFT1001..1055) in
 //                                                 perspective and print its nodes
 //   dw3check --dump-ui CMFONT out.bmp [parts]     render a UI cell sheet's pieces (or all parts) as a contact sheet
@@ -23,6 +26,7 @@
 #include <string>
 
 #include "core/bytes.h"
+#include "npc_extract.h"
 #include "formats/arena.h"
 #include "formats/model.h"
 #include "formats/sprite_pack.h"
@@ -763,6 +767,13 @@ int main(int argc, char** argv) {
             return dumpText(root, argv[i + 1], i + 2 < argc ? int(std::strtol(argv[i + 2], nullptr, 0)) : -1);
         if (!std::strcmp(argv[i], "--dump-model") && i + 2 < argc)
             return dumpModel(root, argv[i + 1], argv[i + 2], i + 3 < argc ? std::atoi(argv[i + 3]) : -1);
+        if (!std::strcmp(argv[i], "--map-file-ids") && i + 2 < argc) return mapFileIds(root, argv[i + 1], argv[i + 2]);
+        if (!std::strcmp(argv[i], "--dump-npcs") && i + 1 < argc) return dumpNpcs(root, fs::path(argv[0]).parent_path(), argv[i + 1]);
+        if (!std::strcmp(argv[i], "--extract-npcs") && i + 1 < argc) {
+            std::vector<std::string> st;
+            for (int k = i + 2; k < argc && argv[k][0] != '-'; ++k) st.push_back(argv[k]);
+            return extractNpcs(root, fs::path(argv[0]).parent_path(), argv[i + 1], st);
+        }
     }
 
     int failures = 0, sprites = 0, frames = 0, stages = 0, chunks = 0, badChunks = 0, moveSets = 0;
@@ -839,6 +850,7 @@ int main(int argc, char** argv) {
             if (!a.talk.empty()) { ++talkActors; talkEntries += int(a.talk.size()); }
     }
     std::printf("talk   : %d event actors with talk tables, %d talk entries\n", talkActors, talkEntries);
+    failures += checkStageLinks(root, fs::path(argv[0]).parent_path());
     // 3D battle arenas DAT/EFFECT/MEFT1001..1055: every one must load (or be a known other layout,
     // which falls back to another arena) and have somewhere to stand.
     int arenas = 0, arenaSkipped = 0, arenaFlat = 0;

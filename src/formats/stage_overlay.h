@@ -52,6 +52,21 @@ struct OverlayActor {
     std::vector<TalkEntry> talk;
 };
 
+// Area link (descriptor +0x14, 24-byte records ended by an all-zero kind): one per trigger index.
+// The trigger map value of a zone is (type << 5) | index; `index` selects the record of this table.
+// FIELDSTG reads: u16 flag, value (condition 1; flag 0xFFFF = none), u16 flag, value (condition 2),
+// u16 kind, u16 arg, i16 x, y, u16 dir, u16 link, u16 pad[2].
+//   kind 1 = warp: arg = target stage KEY (0x200 + index in FIELDSTG's stage table), x/y/dir = arrival,
+//            link = the door scene object of this stage (scene objects with the same `link`, 0x64..) or 0
+//   kind 8 = event zone: arg = event id (handler table at descriptor +0x24), e.g. "I need my partner" blocks
+//   kind 7 = seen on S202 (arg 0x40/0x20/0xFFE0, x = small signed value): open
+struct OverlayLink {
+    std::vector<FlagCond> cond;
+    uint16_t kind = 0, arg = 0;
+    int16_t x = 0, y = 0;
+    uint16_t dir = 0, link = 0;
+};
+
 struct StageOverlay {
     bool ok = false;
     uint32_t desc[32] = {};        // descriptor words stored by the init function (index = offset / 4)
@@ -59,6 +74,7 @@ struct StageOverlay {
     int spawnX = -1, spawnY = -1;  // +0x2C / +0x30 (8.8 fixed point) = player start
     std::vector<OverlayObject> objects;
     std::vector<OverlayActor> actors;
+    std::vector<OverlayLink> links;  // index = trigger index (zone value & 31)
 };
 
 bool loadStageOverlay(ByteView pro, StageOverlay& out, std::string* err = nullptr);
