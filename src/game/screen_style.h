@@ -60,4 +60,10 @@ constexpr uint32_t kGreenText = 0xff8ce678u;
 // pause / options window (original CMFONT window)
 constexpr float kMenuW = 150, kMenuLine = 16;
 
+// save slot screen (New Game: pick a slot / Continue: pick a save). Window centred, one 2-line box per slot.
+constexpr int kSlotCount = 3;
+constexpr float kSlotW = 280, kSlotH = 46, kSlotGap = 4, kSlotTop = 36;
+constexpr uint32_t kSlotSel = 0xc0a07890u;       // selected slot background (same as the pack tabs)
+constexpr uint32_t kSlotEmpty = 0xff9a8a8au;     // "- Empty -"
+
 }  // namespace dw3::style

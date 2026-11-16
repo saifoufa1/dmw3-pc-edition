@@ -23,11 +23,21 @@ build\dmw3.exe                    # the game (finds game data by walking up from
 ```
 Game data layout expected: `<root>/DAT`, `<root>/PRO`, `<root>/STR` (the owner keeps it in `C:\DW3_Project\game_data`).
 
-Launching `build\dmw3.exe` with no flags starts the **PC flow**: title → menu → Digimon Online sign-up → starter
-pack → Asuka City Main Lobby (see docs/ROADMAP.md "PC launch flow"). Test it headlessly (ALWAYS with `--save-dir` on a
+Launching `build\dmw3.exe` with no flags starts the **PC flow**: title → New Game / Continue → save slot → Digimon
+Online sign-up → starter pack → Asuka City Main Lobby → partner download → Central Sector → Tamer Genji's tutorial
+battle, then free play (see docs/ROADMAP.md "PC launch flow"). Test it headlessly (ALWAYS with `--save-dir` on a
 scratch folder, and delete it afterwards, so no test save lands in `%APPDATA%\DMW3PC`):
-`--flow title|menu|options|signup|pack|newgame|continue`, `--account NAME`, `--select-set 1..3`, `--esc-at FRAME`,
-`--lobby STAGE`, e.g. `build\dmw3.exe --save-dir %TEMP%\dmw3t --flow newgame --account Tamer --select-set 2 --frames 400 --screenshot lobby.bmp`.
+`--flow title|menu|options|slots|newslot|signup|pack|newgame|continue`, `--slot N`, `--account NAME`,
+`--select-set 1..3`, `--esc-at FRAME`, `--lobby STAGE`, `--flow-event EVENT`, `--flow-pos X Y`,
+`--confirm-every N --confirm-from FRAME`, e.g.
+`build\dmw3.exe --save-dir %TEMP%\dmw3t --flow newgame --account Tamer --select-set 2 --flow-event download --confirm-every 12 --confirm-from 240 --frames 1500 --screenshot lobby.bmp`.
+
+### Battle EXP rule (owner decision 2026-11-16, `Battle::startResult`)
+Each Digimon of the team has its own level, EXP and stats. After a won battle the Digimon that fought gets the
+full EXP; the other team members get half of it (rounded down) from the bench. Each one levels up on its own
+(`DigimonDb::addExp`, stats grow by the species' growth line in `data/digivolve_paths.cfg`); the fight report
+shows the fighter's level and stat gains. A Digimon can digivolve in battle only to forms its level has unlocked
+(`path` levels). EXP needed for the next level: 30 + 20 × level (placeholder curve).
 
 Useful flags (see `src/platform/win32_main.cpp`):
 - `--battle`, `--form 0..3`, `--boss SPRITE`, `--arena N`, `--cam-yaw DEG`, `--dv` — jump into a fight
@@ -48,6 +58,8 @@ Useful flags (see `src/platform/win32_main.cpp`):
 | `src/game` | `app.*` top-level state machine (title, menu, sign-up, starter pack, log-in, pause), `account.*` AccountService, `screen_style.h` front-end layout/colours, game modes: field, battle (3D arena, real-time), story + dialogue, common types (Party = the player's team) |
 | `src/ui/pack_art.*` | whole-screen original art (title / Digimon Online packs) as one texture per piece |
 | `data/starter_sets.cfg` | the original starter packs A/B/C (members, portraits, `@N` original texts) |
+| `data/digivolve_paths.cfg` + `src/game/digimon_db.*` | per-species stats, growth and digivolve paths |
+| `data/areas.cfg` | area names for the save slot screen |
 | `data/stages/*.stage` | our stage files (walls, exits, NPCs) — editable in game with F2 |
 | `data/story/chapter1.story` | our story script (references original message ids; no game text) |
 | `data/battle_sizes.cfg` | battle sizes (Agumon 0.6, Greymon 1.5, MetalGreymon 2.1, WarGreymon 2.6) |

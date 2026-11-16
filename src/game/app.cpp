@@ -1,9 +1,13 @@
 #include "game/app.h"
 
+#include <cctype>
+#include <cstdio>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 
 #include "core/bytes.h"
 
@@ -28,8 +32,8 @@ constexpr int kGridCols = 13;
 int rowLen(int r) { return r == kGridRowsN - 1 ? 11 + 2 : 13; }  // last row: 11 chars + DEL + OK
 // Cell kind on the last row: x 0..10 chars, 11 DEL, 12 OK.
 
-enum MenuItem { kStart = 0, kContinue = 1, kOptions = 2, kQuit = 3 };
-const char* kMenuLabels[] = {"Start", "Continue", "Options", "Quit"};
+enum MenuItem { kNewGame = 0, kContinue = 1, kOptions = 2, kQuit = 3 };
+const char* kMenuLabels[] = {"New Game", "Continue", "Options", "Quit"};
 
 constexpr int kDoneTicks = 70;  // "downloading" / "logging in" pause before the next screen
 
@@ -63,18 +67,118 @@ bool App::init(const fs::path& dataRoot, const fs::path& stageDir, const DebugOp
     }
     if (!loadStarterPacks(stageDir_.parent_path() / "starter_sets.cfg", packs_, err)) return false;
     loadRegText();
-    accounts_ = std::make_unique<LocalAccountService>(Story::saveDir());
+    loadAreaNames();
+    baseDir_ = Story::saveDir();
+    // One-time move of the single save of earlier versions (account.cfg + story.sav in the save folder) to slot 1.
+    std::error_code ec;
+    if (fs::exists(baseDir_ / "account.cfg", ec) && !fs::exists(slotDir(0), ec)) {
+        fs::create_directories(slotDir(0), ec);
+        fs::rename(baseDir_ / "account.cfg", slotDir(0) / "account.cfg", ec);
+        if (fs::exists(baseDir_ / "story.sav", ec)) fs::copy_file(baseDir_ / "story.sav", slotDir(0) / "story.sav", ec);
+    }
+    refreshSlots();
     loadOptions();
 
     const std::string& s = flow_.stopAt;
+    auto pick = [&](bool used) {  // --slot N, else the first used / free slot
+        if (flow_.slot > 0) return std::min(flow_.slot, style::kSlotCount) - 1;
+        for (int i = 0; i < style::kSlotCount; ++i)
+            if (slots_[size_t(i)].used == used) return i;
+        return 0;
+    };
     if (s == "menu") go(State::MainMenu);
     else if (s == "options") go(State::Options);
-    else if (s == "signup" || s == "pack" || s == "newgame") { go(State::MainMenu); menuSel_ = 0; go(State::SignUp); }
+    else if (s == "slots" || s == "newslot") { slotsForNew_ = s == "newslot"; go(State::MainMenu); go(State::Slots); }
+    else if (s == "signup" || s == "pack" || s == "newgame") { go(State::MainMenu); selectSlot(pick(false)); go(State::SignUp); }
     else if (s == "continue") {
-        if (!saveExists()) { err = "--flow continue: no save in " + Story::saveDir().string(); return false; }
+        selectSlot(pick(true));
+        if (!saveExists()) { err = "--flow continue: no save in " + slotDir(slot_).string(); return false; }
         go(State::LogIn);
     } else go(State::Title);
     return true;
+}
+
+// ------------------------------------------------------------------ save slots
+
+fs::path App::slotDir(int slot) const { return baseDir_ / ("slot" + std::to_string(slot + 1)); }
+
+// Reads the summary of a slot's save (account, area, play time, lead Digimon) without loading the game.
+App::SlotInfo App::readSlot(int slot) const {
+    SlotInfo si;
+    std::ifstream f(slotDir(slot) / "story.sav");
+    std::string line;
+    if (!f || !std::getline(f, line) || line.rfind("dmw3-story", 0) != 0) return si;
+    si.used = true;
+    std::vector<std::pair<std::string, int>> team;  // name, level
+    int active = 0;
+    bool out = true;
+    std::string stage;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::istringstream is(line);
+        std::string k;
+        is >> k;
+        if (k == "account") std::getline(is >> std::ws, si.account);
+        else if (k == "stage") is >> stage;
+        else if (k == "playtime") is >> si.seconds;
+        else if (k == "active") is >> active;
+        else if (k == "partners") { int v = 1; is >> v; out = v != 0; }
+        else if (k == "member") {
+            std::string sprite;
+            int level = 1;
+            is >> sprite >> std::ws;
+            if (std::isdigit(is.peek())) {
+                int skip;
+                is >> level;
+                for (int i = 0; i < 6; ++i) is >> skip;  // exp hp mp atk def spd
+            }
+            std::string name;
+            std::getline(is >> std::ws, name);
+            team.push_back({name, level});
+        }
+    }
+    auto it = areaNames_.find(stage);
+    si.area = it != areaNames_.end() ? it->second : stage;
+    if (!out || team.empty()) si.lead = "No partner yet";
+    else {
+        const auto& m = team[size_t(std::clamp(active, 0, int(team.size()) - 1))];
+        si.lead = m.first + "  Lv " + std::to_string(m.second);
+    }
+    if (si.account.empty()) si.account = "?";
+    return si;
+}
+
+void App::refreshSlots() {
+    slots_.clear();
+    for (int i = 0; i < style::kSlotCount; ++i) slots_.push_back(readSlot(i));
+}
+
+bool App::anySlotUsed() const {
+    for (const auto& s : slots_)
+        if (s.used) return true;
+    return false;
+}
+
+void App::selectSlot(int slot) {
+    slot_ = slot;
+    Story::setSaveDir(slotDir(slot));
+    accounts_ = std::make_unique<LocalAccountService>(slotDir(slot));
+}
+
+void App::loadAreaNames() {
+    areaNames_.clear();
+    std::ifstream f(stageDir_.parent_path() / "areas.cfg");
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string id, name;
+        is >> id >> std::ws;
+        std::getline(is, name);
+        if (!name.empty() && name.back() == '\r') name.pop_back();
+        if (name.size() >= 2 && name.front() == '"') name = name.substr(1, name.find('"', 1) - 1);
+        if (!id.empty()) areaNames_[id] = name;
+    }
 }
 
 void App::shutdown() {
@@ -106,11 +210,11 @@ void App::loadRegText() {
 
 bool App::saveExists() const {
     std::error_code ec;
-    return fs::exists(Story::defaultSavePath(), ec) && accounts_ && !accounts_->rememberedAccount().empty();
+    return slot_ >= 0 && fs::exists(slotDir(slot_) / "story.sav", ec) && accounts_ && !accounts_->rememberedAccount().empty();
 }
 
 void App::loadOptions() {
-    std::ifstream f(Story::saveDir() / "options.cfg");
+    std::ifstream f(baseDir_ / "options.cfg");
     std::string k;
     int v = 0;
     while (f >> k >> v)
@@ -119,8 +223,8 @@ void App::loadOptions() {
 
 void App::saveOptions() const {
     std::error_code ec;
-    fs::create_directories(Story::saveDir(), ec);
-    std::ofstream f(Story::saveDir() / "options.cfg");
+    fs::create_directories(baseDir_, ec);
+    std::ofstream f(baseDir_ / "options.cfg");
     f << "fullscreen " << (fullscreen_ ? 1 : 0) << "\n";
 }
 
@@ -132,8 +236,9 @@ void App::go(State s) {
     doneTicks_ = -1;
     switch (s) {
         case State::MainMenu:
-            menuItems_ = {kStart};
-            if (saveExists()) menuItems_.push_back(kContinue);
+            refreshSlots();
+            menuItems_ = {kNewGame};
+            if (anySlotUsed()) menuItems_.push_back(kContinue);
             menuItems_.push_back(kOptions);
             menuItems_.push_back(kQuit);
             menuSel_ = std::clamp(menuSel_, 0, int(menuItems_.size()) - 1);
@@ -145,8 +250,22 @@ void App::go(State s) {
             gridX_ = gridY_ = 0;
             signError_ = false;
             term_ = {"Welcome to Digimon Online.", "Register your account."};
-            term_.push_back(saveExists() ? "(Replaces the account on this PC)" : "Type, or arrows + confirm.");
+            term_.push_back(slot_ >= 0 ? "Save slot " + std::to_string(slot_ + 1) + ". Type, or arrows." : "Type, or arrows + confirm.");
             break;
+        case State::Slots: {
+            refreshSlots();
+            overwriteAsk_ = false;
+            yes_ = false;
+            slotSel_ = 0;
+            if (!slotsForNew_) {  // Continue: start on the first save
+                for (int i = 0; i < style::kSlotCount; ++i)
+                    if (slots_[size_t(i)].used) { slotSel_ = i; break; }
+            } else {  // New Game: start on the first empty slot
+                for (int i = 0; i < style::kSlotCount; ++i)
+                    if (!slots_[size_t(i)].used) { slotSel_ = i; break; }
+            }
+            break;
+        }
         case State::PackSelect:
             packSel_ = flow_.selectPack > 0 ? std::min(flow_.selectPack, int(packs_.size())) - 1 : 0;
             confirm_ = false;
@@ -207,6 +326,7 @@ void App::update(const Input& in) {
         case State::Title: updateTitle(in); break;
         case State::MainMenu: updateMenu(in); break;
         case State::Options: updateOptions(in); break;
+        case State::Slots: updateSlots(in); break;
         case State::SignUp: updateSignUp(in); break;
         case State::PackSelect: updatePack(in); break;
         case State::LogIn: updateLogIn(in); break;
@@ -235,11 +355,48 @@ void App::updateMenu(const Input& in) {
     if (!(in.confirmP || in.keyP[kVkReturn]) || stateTicks_ < 5) return;
     error_.clear();
     switch (menuItems_[size_t(menuSel_)]) {
-        case kStart: go(State::SignUp); break;
-        case kContinue: go(State::LogIn); break;
+        case kNewGame: slotsForNew_ = true; go(State::Slots); break;
+        case kContinue: slotsForNew_ = false; go(State::Slots); break;
         case kOptions: go(State::Options); break;
         case kQuit: state_ = State::Quit; break;
         default: break;
+    }
+}
+
+// Save slot screen. New Game: any slot (a used one asks before it is overwritten). Continue: used slots only.
+void App::updateSlots(const Input& in) {
+    const int n = style::kSlotCount;
+    const bool ok = stateTicks_ > 5 && (in.confirmP || in.keyP[kVkReturn]);
+    if (overwriteAsk_) {
+        if ((in.left && !prevLeft_) || (in.right && !prevRight_) || (in.up && !prevUp_) || (in.down && !prevDown_)) yes_ = !yes_;
+        if (in.keyP[kVkEscape] || (ok && !yes_)) { overwriteAsk_ = false; return; }
+        if (ok && yes_) {
+            std::error_code ec;
+            fs::remove_all(slotDir(slotSel_), ec);  // the old account + save of this slot
+            overwriteAsk_ = false;
+            selectSlot(slotSel_);
+            go(State::SignUp);
+        }
+        return;
+    }
+    auto step = [&](int d) {
+        for (int k = 1; k <= n; ++k) {
+            const int i = (slotSel_ + d * k + n * k) % n;
+            if (slotsForNew_ || slots_[size_t(i)].used) { slotSel_ = i; return; }
+        }
+    };
+    if (in.up && !prevUp_) step(-1);
+    if (in.down && !prevDown_) step(1);
+    if (in.keyP[kVkEscape]) { go(State::MainMenu); return; }
+    if (!ok) return;
+    const SlotInfo& si = slots_[size_t(slotSel_)];
+    if (slotsForNew_) {
+        if (si.used) { overwriteAsk_ = true; yes_ = false; return; }
+        selectSlot(slotSel_);
+        go(State::SignUp);
+    } else if (si.used) {
+        selectSlot(slotSel_);
+        go(State::LogIn);
     }
 }
 
@@ -432,6 +589,7 @@ void App::render(int ww, int wh) {
         case State::Title: renderTitle(); break;
         case State::MainMenu: renderMenu(); break;
         case State::Options: renderOptions(); break;
+        case State::Slots: renderSlots(); break;
         case State::SignUp: renderSignUp(); break;
         case State::PackSelect: renderPack(); break;
         case State::LogIn: renderLogIn(); break;
@@ -462,8 +620,7 @@ void App::renderMenu() {
         const bool sel = int(i) == menuSel_;
         const uint32_t tint = sel ? 0xffffffffu : style::kPlateDim;
         const int item = menuItems_[i];
-        if (item == kStart) logo_.draw(0, 0x09, style::kPlateX, y, tint);        // original "Start" plate
-        else if (item == kContinue) logo_.draw(0, 0x0A, style::kPlateX, y, tint);  // original "Continue" plate
+        if (item == kContinue) logo_.draw(0, 0x0A, style::kPlateX, y, tint);  // original "Continue" plate
         else {  // our entries: the original empty plate (part 11) + the original font
             logo_.drawPart(0, 11, style::kPlateX, y, tint);
             const std::string label = kMenuLabels[item];
@@ -485,6 +642,48 @@ void App::drawMenuWindow(const char* title, const std::vector<std::string>& item
         const float iy = y + 24 + style::kMenuLine * float(i);
         if (int(i) == sel) ui::drawCursor(x + 10, iy, int(ticks_));
         ui::drawText(x + 24, iy, items[i], int(i) == sel ? ui::kWhite : ui::kGrey);
+    }
+}
+
+void App::renderSlots() {
+    drawTitleBg();
+    ui::fillRect(0, 0, kScreenW, kScreenH, 0x90000000u);
+    const float x = (kScreenW - style::kSlotW) / 2;
+    const char* title = slotsForNew_ ? "New Game - choose a save slot" : "Continue - choose a save";
+    ui::drawText(x + 4, style::kSlotTop - 18, title, ui::kYellow);
+    for (int i = 0; i < style::kSlotCount; ++i) {
+        const SlotInfo& si = slots_[size_t(i)];
+        const float y = style::kSlotTop + (style::kSlotH + style::kSlotGap) * float(i);
+        const bool sel = i == slotSel_;
+        const bool enabled = slotsForNew_ || si.used;
+        ui::drawWindow(x, y, style::kSlotW, style::kSlotH);
+        if (sel) ui::fillRect(x + 4, y + 4, style::kSlotW - 8, style::kSlotH - 8, style::kSlotSel);
+        if (sel) ui::drawCursor(x + 8, y + 6, int(ticks_));
+        const uint32_t main = enabled ? (sel ? ui::kWhite : ui::kGrey) : style::kSlotEmpty;
+        ui::drawText(x + 22, y + 6, std::to_string(i + 1), ui::kYellow);
+        if (!si.used) {
+            ui::drawText(x + 40, y + 6, "- Empty -", style::kSlotEmpty);
+            continue;
+        }
+        char t[32];
+        std::snprintf(t, sizeof t, "%lld:%02lld", si.seconds / 3600, (si.seconds / 60) % 60);
+        // line 1: account + play time, line 2: area, line 3: lead Digimon + level
+        const int tw = ui::measureText(std::string("Time ") + t);
+        ui::drawTextFit(x + 40, y + 6, si.account, style::kSlotW - 60 - float(tw), main);
+        ui::drawText(x + style::kSlotW - 18 - float(tw), y + 6, std::string("Time ") + t, main);
+        ui::drawTextFit(x + 40, y + 18, si.area, style::kSlotW - 50, main);
+        ui::drawTextFit(x + 40, y + 30, si.lead, style::kSlotW - 50, sel ? style::kGreenText : main);
+    }
+    const float hy = style::kSlotTop + (style::kSlotH + style::kSlotGap) * float(style::kSlotCount) + 2;
+    ui::drawTextFit(x + 4, hy, "Up/Down: choose  Confirm: OK  Esc: back", style::kSlotW - 8, style::kTermText);
+    if (overwriteAsk_) {
+        const float wy = 92;
+        ui::fillRect(0, 0, kScreenW, kScreenH, 0x80000000u);
+        ui::drawWindow(70, wy, 180, 46);
+        ui::drawText(82, wy + 8, "Overwrite save slot " + std::to_string(slotSel_ + 1) + "?", ui::kWhite);
+        ui::drawText(110, wy + 26, "YES", yes_ ? ui::kYellow : ui::kGrey);
+        ui::drawText(180, wy + 26, "NO", !yes_ ? ui::kYellow : ui::kGrey);
+        ui::drawCursor(yes_ ? 98.f : 168.f, wy + 26, int(ticks_));
     }
 }
 

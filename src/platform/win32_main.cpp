@@ -5,11 +5,11 @@
 //            [--dv] (full digivolve gauge) [--form 0..3] (start digivolved) [--digivolve-at FRAME] [--attack 1..3]
 //            [--arena 1..55] (battle arena MEFT10xx) [--cam-yaw DEG] (battle camera angle)
 //   PC flow (default when no test flag is given): title -> menu -> Digimon Online sign-up -> starter pack -> lobby
-//            [--flow title|menu|options|signup|pack|newgame|continue] (start at / drive to that screen)
+//            [--flow title|menu|options|slots|newslot|signup|pack|newgame|continue] (start at / drive to that screen) [--slot N]
 //            [--esc-at FRAME] (press Esc)  [--select-set N] (pack 1..3)  [--account NAME]  [--save-dir DIR] (tests: keep saves out of APPDATA)
-//            [--lobby STAGE] (default S210, Asuka City Main Lobby)
+//            [--lobby STAGE] (default S210, Asuka City Main Lobby)  [--flow-event NAME] [--flow-pos X Y] (once playing)
 //   story:   [--new-game] [--no-story] [--story-flags a,b] [--story-event NAME] [--pos X Y]
-//            [--confirm-at FRAME]... [--confirm-every N] [--walk lrud FROM TO]
+//            [--confirm-at FRAME]... [--confirm-every N] [--confirm-from FRAME] [--walk lrud FROM TO]
 #include <windows.h>
 #include <shellapi.h>
 #include <GL/gl.h>
@@ -168,7 +168,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     int autoAttack = 0;    // testing: use only this move (1..3) every 100 frames
     std::vector<int> confirmAt;  // testing: press Space on these frames
     std::vector<int> escAt;      // testing: press Esc on these frames (PC flow pause menu)
-    int confirmEvery = 0;        // testing: press Space every N frames
+    int confirmEvery = 0;        // testing: press Space every N frames (from frame confirmFrom on)
+    int confirmFrom = 0;
     std::string walkDir;         // testing: hold a direction (l/r/u/d, combinable) from frame A to B
     int walkFrom = 0, walkTo = 0;
     DebugOptions dbg;
@@ -193,6 +194,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--confirm-at" && i + 1 < a.size()) confirmAt.push_back(std::stoi(a[++i]));
         else if (a[i] == "--esc-at" && i + 1 < a.size()) escAt.push_back(std::stoi(a[++i]));
         else if (a[i] == "--confirm-every" && i + 1 < a.size()) confirmEvery = std::stoi(a[++i]);
+        else if (a[i] == "--confirm-from" && i + 1 < a.size()) confirmFrom = std::stoi(a[++i]);
         else if (a[i] == "--walk" && i + 3 < a.size()) { walkDir = a[i + 1]; walkFrom = std::stoi(a[i + 2]); walkTo = std::stoi(a[i + 3]); i += 3; }
         else if (a[i] == "--screenshot" && i + 1 < a.size()) shotPath = a[++i];
         else if (a[i] == "--frames" && i + 1 < a.size()) shotFrames = std::stoi(a[++i]);
@@ -213,6 +215,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--select-set" && i + 1 < a.size()) flow.selectPack = std::stoi(a[++i]);
         else if (a[i] == "--account" && i + 1 < a.size()) flow.account = a[++i];
         else if (a[i] == "--lobby" && i + 1 < a.size()) flow.lobbyStage = a[++i];
+        else if (a[i] == "--slot" && i + 1 < a.size()) flow.slot = std::stoi(a[++i]);
+        else if (a[i] == "--flow-event" && i + 1 < a.size()) dbg.flowEvent = a[++i];
+        else if (a[i] == "--flow-pos" && i + 2 < a.size()) { dbg.flowX = std::stoi(a[i + 1]); dbg.flowY = std::stoi(a[i + 2]); i += 2; }
         else if (a[i] == "--save-dir" && i + 1 < a.size()) Story::setSaveDir(fs::path(a[++i]));
     }
     legacy = dbg.stageGiven || dbg.newGame || dbg.noStory || dbg.startBattle || !dbg.storyEvent.empty() ||
@@ -326,7 +331,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                 }
                 for (int f : confirmAt) if (frame == f) h.confirm = true;
                 for (int f : escAt) if (frame == f) h.key[VK_ESCAPE] = true;
-                if (confirmEvery > 0 && frame % confirmEvery == 0 && frame > 0) h.confirm = true;
+                if (confirmEvery > 0 && frame % confirmEvery == 0 && frame > confirmFrom) h.confirm = true;
                 if (!walkDir.empty() && frame >= walkFrom && frame < walkTo) {
                     h.left |= walkDir.find('l') != std::string::npos;
                     h.right |= walkDir.find('r') != std::string::npos;
