@@ -165,7 +165,7 @@ int lineHeight(UiFont f) { return f == UiFont::White ? 14 : f == UiFont::Orange 
 namespace {
 
 // Shared walker for ASCII text: draw = false only measures.
-int walkText(float x, float y, const std::string& s, uint32_t color, UiFont f, bool draw) {
+int walkText(float x, float y, const std::string& s, uint32_t color, UiFont f, bool draw, float sx = 1.f) {
     float cx = x, cy = y;
     int widest = 0;
     if (draw) {
@@ -185,8 +185,8 @@ int walkText(float x, float y, const std::string& s, uint32_t color, UiFont f, b
         const int adv = ch == ' ' && f == UiFont::Small ? 4 : advance(f, part);
         if (draw && part >= 0 && ch != ' ')
             if (const AtlasRect* r = partRect(Sheet::Font, part))
-                quad(float(r->x), float(r->y), float(r->w), float(r->h), snap(cx), snap(cy), float(r->w), float(r->h));
-        cx += float(adv);
+                quad(float(r->x), float(r->y), float(r->w), float(r->h), snap(cx), snap(cy), float(r->w) * sx, float(r->h));
+        cx += float(adv) * sx;
     }
     if (draw) glEnd();
     return std::max(widest, int(cx - x));
@@ -262,6 +262,13 @@ int drawText(float x, float y, const std::string& s, uint32_t color, UiFont f) {
 int measureText(const std::string& s, UiFont f) {
     if (!ready()) return int(s.size()) * 8;
     return walkText(0, 0, s, 0, f, false);
+}
+
+int drawTextFit(float x, float y, const std::string& s, float maxW, uint32_t color, UiFont f) {
+    if (!ready()) return 0;
+    const int w = measureText(s, f);
+    const float sx = w > maxW && w > 0 ? std::max(0.55f, maxW / float(w)) : 1.f;  // squeeze long names
+    return walkText(x, y, s, color, f, true, sx);
 }
 
 void drawTextRight(float x, float y, const std::string& s, uint32_t color, UiFont f) {

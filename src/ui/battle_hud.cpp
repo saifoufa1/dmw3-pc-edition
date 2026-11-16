@@ -54,7 +54,7 @@ void BattleHud::render() const {
 
     // ---- enemy plate (top right) ----
     drawPiece(Sheet::Fight, kEnemyPlate, kEnemyX, kEnemyY);
-    drawText(kEnemyX + 10, kEnemyY + 6, enemy_.name, enemy_.boss ? kRedText : kWhite);
+    drawTextFit(kEnemyX + 10, kEnemyY + 6, enemy_.name, float(122 - measureText("LV" + num(enemy_.level), UiFont::Small) - 6), enemy_.boss ? kRedText : kWhite);
     drawTextRight(kEnemyX + 132, kEnemyY + 8, "LV" + num(enemy_.level), kWhite, UiFont::Small);
     {
         const float k = enemy_.maxHp > 0 ? std::max(0.f, shownHp_[1]) / float(enemy_.maxHp) : 0.f;
@@ -63,7 +63,7 @@ void BattleHud::render() const {
 
     // ---- partner plate (bottom left) ----
     drawPiece(Sheet::Fight, kPartnerPlate, kPartnerX, kPartnerY);
-    drawText(kPartnerX + 13, kPartnerY + 6, partner_.name, kWhite);
+    drawTextFit(kPartnerX + 13, kPartnerY + 6, partner_.name, 66.f, kWhite);
     drawText(kPartnerX + 82, kPartnerY + 10, "LV", kWhite, UiFont::Small);
     drawTextRight(kPartnerX + 141, kPartnerY + 10, num(partner_.level), kWhite, UiFont::Small);
     {
@@ -98,7 +98,7 @@ void BattleHud::render() const {
             const bool ready = c.available && c.cooldown <= 0.f;
             if (c.pressed) drawCursor(kCmdX + 6, y, ticks_);
             const uint32_t col = c.pressed ? kYellow : ready ? kWhite : kGrey;
-            drawText(kCmdX + 16, y, c.name, col);
+            drawTextFit(kCmdX + 16, y, c.name, float(kCmdW - 16 - 48), col);
             if (c.mp > 0) drawTextRight(kCmdX + kCmdW - 24, y + 3, num(c.mp), ready ? kWhite : kGrey, UiFont::Small);
             // hint: keyboard key in the orange font, gamepad button dimmer next to it
             if (!c.keyHint.empty()) drawText(kCmdX + kCmdW - 21, y + 2, c.keyHint, ready ? kWhite : kGrey, UiFont::Orange);

@@ -26,6 +26,8 @@
 #include "game/field.h"
 #include "render/camera3d.h"
 #include "render/model_renderer.h"
+#include "ui/battle_hud.h"
+#include "ui/result_screen.h"
 
 namespace dw3 {
 
@@ -200,6 +202,11 @@ private:
     std::vector<Spark> sparks_;
     std::vector<Popup> popups_;
     EvoSeq seq_;
+    // Original UI: battle HUD + post-battle fight report (EXP / BIT / level up).
+    ui::BattleHud hud_;
+    ui::ResultScreen result_;
+    void updateHud();
+    void startResult();
     // Enemy digivolution (e.g. Black Agumon -> BlackGreymon below half HP).
     const char* foeEvoModel_ = nullptr;
     const char* foeEvoName_ = nullptr;

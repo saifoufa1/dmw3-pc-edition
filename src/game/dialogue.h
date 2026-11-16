@@ -38,6 +38,7 @@ public:
 
     void update(const Input& in);
     void renderHud(int windowW, int windowH);
+    void renderOriginal();  // original window + font (when src/ui data is loaded)
 
 private:
     bool pageDone() const { return reveal_ >= int(pages_.empty() ? 0 : pages_[page_].size()); }

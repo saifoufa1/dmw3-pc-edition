@@ -1,4 +1,5 @@
 #include "game/battle.h"
+#include "ui/ui_draw.h"
 
 #include <fstream>
 #include <sstream>
@@ -199,8 +200,8 @@ bool Battle::start(const BattleRequest& req, const std::string& stageId, std::st
     if (!me_.a.sprite || !foe_.a.sprite) return false;
 
     me_.name = party_.partnerName;
-    me_.level = 1 + party_.wins;
-    baseMaxHp_ = 120.f + 10.f * float(party_.wins);
+    me_.level = std::max(1, party_.level);
+    baseMaxHp_ = 120.f + 10.f * float(me_.level - 1);
     me_.maxHp = me_.hp = baseMaxHp_;
     me_.maxMp = me_.mp = 60;
     me_.a.dir = E;
@@ -843,6 +844,11 @@ void Battle::updateCamera(const Input* in, bool snap) {
 
 void Battle::update(const Input& in) {
     ++ticks_;
+    if (result_.active()) {  // post-battle fight report
+        result_.update(in.confirmP);
+        if (result_.done()) done_ = true;
+        return;
+    }
     if (shake_ > 0) --shake_;
     if (screenFlash_ > 0) --screenFlash_;
     for (int& b : btnFx_) b += b > 0 ? -1 : b < 0 ? 1 : 0;
@@ -907,7 +913,10 @@ void Battle::update(const Input& in) {
             if (won_) foe_.deathFade = std::max(0.f, foe_.deathFade - 0.02f);
             else if (!me_.model) me_.deathFade = std::max(0.f, me_.deathFade - 0.02f);
             me_.a.move = foe_.a.move = Move::Idle;
-            if (--phaseTimer_ <= 0 || (phaseTimer_ < 100 && in.confirmP)) done_ = true;
+            if (--phaseTimer_ <= 0 || (phaseTimer_ < 100 && in.confirmP)) {
+                if (won_ && ui::ready()) startResult();
+                else done_ = true;
+            }
         }
 
         // projectiles (3D)
@@ -939,6 +948,7 @@ void Battle::update(const Input& in) {
     settleOnFloor(me_, false);
     settleOnFloor(foe_, false);
     updateCamera(&in, false);
+    updateHud();
 
     for (auto& p : sparks_) { p.x += p.vx; p.y += p.vy; p.z += p.vz; p.vy += 0.05f * kPxW; --p.life; }
     sparks_.erase(std::remove_if(sparks_.begin(), sparks_.end(), [](const Spark& p) { return p.life <= 0; }), sparks_.end());
@@ -1061,7 +1071,13 @@ void Battle::render() {
     for (const auto& p : sparks_)
         glow3D(p.x, p.y, p.z, p.r, (p.color & 0x00ffffffu) | (uint32_t(220 * p.life / p.max) << 24));
 
-    // ---- bars (virtual coords) ----
+    // ---- original battle HUD (falls back to plain bars without the UI data) ----
+    if (ui::ready()) {
+        if (!sizePanel_) hud_.render();
+        if (screenFlash_ > 0) gfx::fillRect(0, 0, kScreenW, kScreenH, rgba(255, 255, 255, uint8_t(std::min(255, 9 * screenFlash_))));
+        if (result_.active()) result_.render();
+        return;
+    }
     auto bar = [](float x, float y, float w, float h, float frac, uint32_t col) {
         gfx::fillRect(x - 1, y - 1, w + 2, h + 2, 0xc0000000u);
         gfx::fillRect(x, y, w * std::clamp(frac, 0.f, 1.f), h, col);
@@ -1080,7 +1096,10 @@ void Battle::render() {
 void Battle::renderHud(int ww, int wh) {
     int x, y;
     char buf[160];
+    if (result_.active()) return;  // the fight report covers the screen
+    const bool orig = ui::ready();  // original HUD drawn in render(): skip the C++ status text / buttons
     gfx::toWindow(10, 8, x, y);
+    if (!orig) {
     std::snprintf(buf, sizeof buf, "%s  Lv%d  %s", formName().c_str(), me_.level, evoStage(me_.evo).name);
     gfx::drawText(x, y + 10, buf, 0xffffffffu);
     gfx::toWindow(10, 48, x, y);
@@ -1091,6 +1110,7 @@ void Battle::renderHud(int ww, int wh) {
     gfx::toWindow(188, 8, x, y);
     std::snprintf(buf, sizeof buf, "%s%s  Lv%d", foe_.boss ? "BOSS " : "", foe_.name.c_str(), foe_.level);
     gfx::drawText(x, y + 10, buf, foe_.boss ? 0xff4040ffu : 0xffffffffu);
+    }
 
     // ---- attack button panel: key, gamepad button, move name, MP cost, cooldown ----
     static const char* kKeys[3] = {"J", "K", "L"};
@@ -1098,7 +1118,7 @@ void Battle::renderHud(int ww, int wh) {
     static const uint32_t kPadCol[3] = {rgba(70, 150, 255), rgba(255, 80, 70), rgba(255, 205, 40)};
     const int S = std::max(1, gfx::pixelScale());
     const bool fighting = phase_ == Phase::Fight && !seq_.active;
-    for (int s = 0; s < 3 && !sizePanel_; ++s) {
+    for (int s = 0; s < 3 && !sizePanel_ && !orig; ++s) {
         const FormAttack& atk = form()->atk[s];
         const bool cooling = me_.cd[s] > 0, noMp = me_.mp < atk.mp;
         const bool can = fighting && !cooling && !noMp && me_.act < 0;
@@ -1146,7 +1166,7 @@ void Battle::renderHud(int ww, int wh) {
             gfx::drawText(x1 - pad - int(std::strlen(buf)) * gfx::kCharW, line2, buf, rgba(200, 200, 200));
         }
     }
-    if (!sizePanel_) {
+    if (!sizePanel_ && !orig) {
         int hx, hy;
         gfx::toWindow(160, kBtnY + kBtnH + 3, hx, hy);
         gfx::drawTextCentered(hx, hy + 11, me_.evo > 0 ? "WASD move  Space guard  U digivolve (hold: Rookie)  Q/E right-drag wheel: camera"
@@ -1155,7 +1175,7 @@ void Battle::renderHud(int ww, int wh) {
     }
 
     // the move just used, as a short banner over the partner
-    if (moveNameT_ > 0 && !moveName_.empty()) {
+    if (!orig && moveNameT_ > 0 && !moveName_.empty()) {  // the original command window highlights it instead
         float hx = 160, hy = kHudTop;
         toScreen(me_.x, me_.y - me_.bodyH(), me_.z, hx, hy);
         gfx::toWindow(std::clamp(hx, 0.f, float(kScreenW)), std::clamp(hy - 14.f, kHudTop - 4.f, float(kScreenH) - 60.f), x, y);
@@ -1208,6 +1228,60 @@ void Battle::renderHud(int ww, int wh) {
     if (sizePanel_) renderSizePanel();
     (void)ww;
     (void)wh;
+}
+
+// ---------------------------------------------------------------- original UI glue
+void Battle::updateHud() {
+    if (!ui::ready()) return;
+    ui::HudFighter p, e;
+    p.name = party_.partnerId == "P006AGUM" ? formName() : me_.name;  // short: the plate fits ~11 letters
+    p.level = me_.level;
+    p.hp = int(std::ceil(std::max(0.f, me_.hp)));
+    p.maxHp = int(me_.maxHp);
+    p.mp = int(me_.mp);
+    p.maxMp = int(me_.maxMp);
+    p.dv = me_.evo >= kMaxEvo ? 1.f : me_.dv / 100.f;
+    p.dvReady = me_.dv >= 100.f && me_.evo < kMaxEvo;
+    e.name = foe_.name;
+    e.level = foe_.level;
+    e.hp = int(std::ceil(std::max(0.f, foe_.hp)));
+    e.maxHp = int(foe_.maxHp);
+    e.boss = foe_.boss;
+    hud_.setFighters(p, e);
+    static const char* kKeys[3] = {"J", "K", "L"};
+    static const char* kPad[3] = {"X", "B", "Y"};
+    const bool fighting = phase_ == Phase::Fight && !seq_.active;
+    ui::HudCommand c[3];
+    for (int s = 0; s < 3; ++s) {
+        const FormAttack& atk = form()->atk[s];
+        c[s].name = atk.name;
+        c[s].mp = int(atk.mp);
+        c[s].cooldown = me_.cd[s] > 0 ? float(me_.cd[s]) / float(std::max(1, atk.cooldown)) : 0.f;
+        c[s].available = fighting && me_.cd[s] == 0 && me_.mp >= atk.mp && me_.act < 0;
+        c[s].pressed = btnFx_[s] > 0 || me_.act == s;
+        c[s].keyHint = kKeys[s];
+        c[s].padHint = kPad[s];
+    }
+    hud_.setCommands(c, 3);
+    hud_.setVisible(!sizePanel_);
+    hud_.update();
+}
+
+// Won: EXP / BIT, level ups, then the original fight report screen.
+void Battle::startResult() {
+    const int exp = int((10 + foe_.level * 8) * (foe_.boss ? 3 : 1) * (foeEvolved_ ? 1.5f : 1.f));
+    const int bits = 5 + foe_.level * 6 * (foe_.boss ? 3 : 1);
+    const int oldLv = std::max(1, party_.level);
+    party_.exp += exp;
+    party_.bits += bits;
+    while (party_.exp >= Party::expToNext(party_.level)) {
+        party_.exp -= Party::expToNext(party_.level);
+        ++party_.level;
+    }
+    std::vector<ui::StatDelta> stats;
+    if (party_.level > oldLv) stats = {{"HP", 10 * (party_.level - oldLv)}};
+    const int portrait = party_.partnerId == "P006AGUM" ? 0 : -1;  // STFRPT frame 0x00 = Agumon (others not mapped yet)
+    result_.start(exp, bits, oldLv, party_.level, stats, party_.partnerName, portrait);
 }
 
 // ---------------------------------------------------------------- size dashboard

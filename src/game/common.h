@@ -83,6 +83,8 @@ struct Party {
     std::string partnerId = "P006AGUM";
     std::string partnerName = "Agumon";
     int wins = 0;
+    int level = 1, exp = 0, bits = 0;  // partner level, EXP toward the next level, money
+    static int expToNext(int level) { return 30 + 20 * level; }
 };
 
 }  // namespace dw3

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "render/gl_renderer.h"
+#include "ui/ui_draw.h"
 
 namespace dw3 {
 
@@ -74,9 +75,44 @@ void Dialogue::update(const Input& in) {
     }
 }
 
+// Original DW3 message window + font (virtual 320x240 coordinates).
+void Dialogue::renderOriginal() {
+    constexpr float x0 = 8, y0 = 170, w = 304, h = 62;
+    ui::drawWindow(x0, y0, w, h);
+    if (!speaker_.empty()) {
+        const float tw = float(ui::measureText(speaker_)) + 34.f;
+        ui::drawWindow(x0 + 6, y0 - 18, std::max(24.f, tw), 24);
+        ui::drawText(x0 + 21, y0 - 12, speaker_, rgba(255, 220, 120));
+    }
+    const std::string& pg = pages_[page_];
+    const std::string shown = pg.substr(0, size_t(std::clamp(reveal_, 0, int(pg.size()))));
+    ui::drawText(x0 + 18, y0 + 9, shown);
+    const bool last = page_ + 1 >= pages_.size();
+    if (pageDone() && last && !options_.empty()) {
+        int ow = 0;
+        for (auto& o : options_) ow = std::max(ow, ui::measureText(o));
+        const float bw = float(ow) + 30.f, lh = float(ui::lineHeight(UiFont::White)) + 2.f;
+        const float bh = float(options_.size()) * lh + 14.f;
+        const float bx = x0 + w - bw - 4, by = y0 - bh - 4;
+        ui::drawWindow(bx, by, bw, bh);
+        for (size_t i = 0; i < options_.size(); ++i) {
+            const bool sel = int(i) == choice_;
+            if (sel) ui::drawCursor(bx + 6, by + 7 + float(i) * lh, blink_);
+            ui::drawText(bx + 18, by + 7 + float(i) * lh, options_[i], sel ? rgba(255, 230, 90) : ui::kWhite);
+        }
+    } else if (pageDone()) {
+        ui::drawPrompt(x0 + w - 16, y0 + h - 14, blink_);
+    }
+}
+
 void Dialogue::renderHud(int ww, int wh) {
-    (void)ww; (void)wh;
     if (!active_) return;
+    if (ui::ready()) {
+        gfx::beginVirtual();
+        renderOriginal();
+        gfx::beginHud(ww, wh);
+        return;
+    }
     DialogueSkin& s = *skin_;
     int x0, y0, x1, y1;
     gfx::toWindow(10, 164, x0, y0);

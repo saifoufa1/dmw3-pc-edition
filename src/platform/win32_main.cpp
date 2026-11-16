@@ -17,6 +17,7 @@
 
 #include "core/bytes.h"
 #include "game/game.h"
+#include "ui/ui_draw.h"
 #include "ui/ui_preview.h"
 
 namespace fs = std::filesystem;
@@ -252,7 +253,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
                 g_running = false;
                 exitCode = 1;
             }
-        } else if (!game.init(root, findStageDir(exeDir), stage, dbg, err)) {
+        } else if (ui::init(root), !game.init(root, findStageDir(exeDir), stage, dbg, err)) {  // original UI (font, windows, HUD)
             MessageBoxA(hwnd, err.c_str(), "DMW3 PC Edition - load error", MB_ICONERROR);
             g_running = false;
             exitCode = 1;
@@ -347,6 +348,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
             }
             SwapBuffers(dc);
         }
+        if (!preview) ui::shutdown();
     }  // Game (and its textures) destroyed while the GL context is still current
 
     wglMakeCurrent(nullptr, nullptr);

@@ -39,6 +39,8 @@ void fillRect(float x, float y, float w, float h, uint32_t rgbaColor);
 // Text in window pixels (HUD). Requires initText() once after the GL context exists.
 void initText(void* hdc);
 void beginHud(int windowW, int windowH);
+// Back to the 320x240 virtual projection (no clear) - for original-UI drawing after beginHud.
+void beginVirtual();
 void drawText(int x, int y, const char* s, uint32_t rgbaColor = 0xffffffffu);
 void drawTextCentered(int cx, int y, const char* s, uint32_t rgbaColor = 0xffffffffu);
 constexpr int kCharW = 8;  // Consolas 15px advance

@@ -184,6 +184,18 @@ void initText(void* hdc) {
     DeleteObject(font);
 }
 
+void beginVirtual() {
+    glViewport(g_ox, g_oy, kScreenW * g_scale, kScreenH * g_scale);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, kScreenW, kScreenH, 0, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
 void beginHud(int ww, int wh) {
     glViewport(0, 0, ww, wh);
     glMatrixMode(GL_PROJECTION);

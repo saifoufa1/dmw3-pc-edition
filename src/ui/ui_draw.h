@@ -51,6 +51,8 @@ void drawWindow(float x, float y, float w, float h, WindowStyle style = WindowSt
 // Text. Returns the advance width of the widest line. '\n' starts a new line.
 int drawText(float x, float y, const std::string& ascii, uint32_t color = kWhite, UiFont font = UiFont::White);
 int measureText(const std::string& ascii, UiFont font = UiFont::White);
+// Like drawText, but squeezes the text horizontally (down to 55%) so it fits in maxW.
+int drawTextFit(float x, float y, const std::string& ascii, float maxW, uint32_t color = kWhite, UiFont font = UiFont::White);
 int lineHeight(UiFont font);
 // Right-aligned helper: text ends at x.
 void drawTextRight(float x, float y, const std::string& ascii, uint32_t color = kWhite, UiFont font = UiFont::White);

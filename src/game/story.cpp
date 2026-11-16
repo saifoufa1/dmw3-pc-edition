@@ -227,6 +227,7 @@ bool Story::saveGame(const fs::path& p, const std::string& stage, int x, int y) 
     f << "stage " << stage << ' ' << x << ' ' << y << "\n";
     f << "partner " << party_.partnerId << ' ' << party_.partnerName << "\n";
     f << "wins " << party_.wins << "\n";
+    f << "level " << party_.level << " " << party_.exp << " " << party_.bits << "\n";
     f << "chapter " << chapter_ << "\n";
     f << "objective " << objective_ << "\n";
     for (auto& s : flags_) f << "flag " << s << "\n";
@@ -255,6 +256,7 @@ bool Story::loadGame(const fs::path& p, std::string& stage, int& x, int& y) {
         if (k == "stage") is >> stage >> x >> y;
         else if (k == "partner") { is >> party_.partnerId; std::getline(is >> std::ws, party_.partnerName); partnerChanged_ = true; }
         else if (k == "wins") is >> party_.wins;
+        else if (k == "level") is >> party_.level >> party_.exp >> party_.bits;
         else if (k == "chapter") chapter_ = v;
         else if (k == "objective") objective_ = v;
         else if (k == "flag") flags_.insert(v);
