@@ -52,10 +52,13 @@ A slot is either `RLEN`-compressed or raw. Decompressed chunk:
 | 0x00 | u32 | offset of the TIM inside the chunk (0 = empty) |
 | 0x04 | u32 n, then n × Rect | layer A rects |
 | … | u32 m, then m × Rect | layer B rects (hypothesis: upper/foreground layer) |
+| … | u32 k, then k × Rect | layer C rects: the low floor / ground of the cell (verified: the TIM starts right after this list in all 11745 chunks) |
 | TIM offset | TIM | 8bpp atlas, 256-colour CLUT |
 
 `Rect = u16 dstX, dstY, srcX, srcY, w, h` (dst relative to the cell). The current renderer draws both layers into one background.
-**Open:** whether layer B should be drawn above actors; black holes are filled by the MASK/TMPK scene pieces placed by the WSTAG overlay (see below).
+Layer C was missed until 2026-11-16 and left the black gaps around many stages (e.g. the blue floor of the Main Lobby
+S210). The three lists only overlap with identical texels, so the draw order (C, A, B) is not visible.
+**Open:** whether layer B should be drawn above actors; the remaining black holes are filled by the MASK/TMPK scene pieces placed by the WSTAG overlay (see below).
 
 ## FIELD/STAGE/S###MASK.BIN — verified (237/237)
 `u32 offsets[]` (0-terminated) → RLEN blocks, each a TIM. Block 0 = 8bpp 128x256 with `n` CLUT rows (256 colours each);

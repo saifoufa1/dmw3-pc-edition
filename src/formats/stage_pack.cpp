@@ -27,10 +27,18 @@ int decodeChunk(ByteView chunk, Image& map, int cellX, int cellY) {
     uint32_t hdr;
     if (!chunk.u32(0, hdr)) return -1;
     if (hdr == 0) return 0;
-    // Layout: u32 timOffset, u32 n, n*Rect (base layer), u32 m, m*Rect (upper layer), pad, TIM.
-    std::vector<Rect> rects;
+    // Layout: u32 timOffset, then three rect lists (u32 n, n*Rect each), then the TIM (it starts right after the
+    // third list in all 11745 chunks of the corpus). List 3 holds the low floor / ground of the cell (e.g. the blue
+    // lobby floor of S210); it was missed before, which left black gaps. Drawn first: the lists overlap only with
+    // identical texels, so the order is not visible.
+    std::vector<Rect> lists[3];
     size_t p = 4;
-    if (!readRects(chunk, p, rects) || !readRects(chunk, p, rects) || p > hdr) return -1;
+    for (auto& l : lists)
+        if (!readRects(chunk, p, l)) return -1;
+    if (p > hdr) return -1;
+    std::vector<Rect> rects = lists[2];
+    rects.insert(rects.end(), lists[0].begin(), lists[0].end());
+    rects.insert(rects.end(), lists[1].begin(), lists[1].end());
     Image atlas;
     if (!decodeTim(chunk, hdr, atlas)) return -1;
     const int ox = cellX * kStageCell, oy = cellY * kStageCell;
