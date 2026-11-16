@@ -12,7 +12,7 @@ namespace {
 // button panel; the top keeps the fighter's head below the HP bars (see clampArena).
 constexpr float kArenaL = 22, kArenaR = 298, kArenaT = 112, kArenaB = 198;
 constexpr float kHudTop = 50;           // fighters' heads stay below this line
-constexpr float kRookieHeightPx = 37;  // on-screen height of a Rookie model; forms grow by EvoStage::scale
+constexpr float kRookieHeightPx = 27.6f;  // on-screen height of a Rookie model; forms grow by EvoStage::scale
 // Heights the technique effect scales were tuned at (Rookie..Mega); effects scale with the form.
 constexpr float kFxTunedH[4] = {40, 58, 76, 96};
 constexpr int kRevertHold = 60;        // hold digivolve this many ticks to go back to Rookie
