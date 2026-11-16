@@ -123,6 +123,7 @@ bool saveScreenshot(const fs::path& p) {
     Image img;
     img.resize(g_winW, g_winH);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadBuffer(GL_BACK);  // the frame just rendered (called before SwapBuffers)
     glReadPixels(0, 0, g_winW, g_winH, GL_RGBA, GL_UNSIGNED_BYTE, img.px.data());
     for (int y = 0; y < g_winH / 2; ++y)  // GL origin is bottom-left
         std::swap_ranges(img.px.begin() + size_t(y) * g_winW, img.px.begin() + size_t(y + 1) * g_winW,
@@ -248,6 +249,18 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
     HWND hwnd = CreateWindowA("DMW3PC", "Digimon World 3 - PC Edition (demo)", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                               CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr,
                               inst, nullptr);
+    if (!shotPath.empty() || shotFrames > 0) {
+        // Test / automation run: put the window in front and on top, so it is never covered by the terminal
+        // (a covered OpenGL window has undefined pixels and screenshots come out black or stale).
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        ShowWindow(hwnd, SW_SHOW);
+        if (!SetForegroundWindow(hwnd)) {  // Windows refuses focus to background processes: tap Alt, retry
+            keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY, 0);
+            keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
+            SetForegroundWindow(hwnd);
+        }
+        BringWindowToTop(hwnd);
+    }
     HDC dc = GetDC(hwnd);
     PIXELFORMATDESCRIPTOR pfd{sizeof(pfd), 1, PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
                               PFD_TYPE_RGBA, 32};
