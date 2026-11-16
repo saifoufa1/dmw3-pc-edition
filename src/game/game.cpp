@@ -14,12 +14,15 @@ bool Game::init(const std::filesystem::path& dataRoot, const std::filesystem::pa
     models_.setRoot(dataRoot);
     dbg_ = dbg;
     if (!field_.init(dataRoot, stageDir, startStage, err)) return false;
+    battle_.setSizeFile(stageDir.parent_path() / "battle_sizes.cfg");  // data/battle_sizes.cfg
+    if (dbg.devTools || dbg.sizePanel) battle_.enableDevTools();
     if (dbg.startBattle) {
         const bool boss = dbg.battleSprite != "P171BAGM";
         BattleRequest r{dbg.battleSprite, boss ? "Digmon" : "Black Agumon", boss ? 8 : 3, boss};
         if (!battle_.start(r, &field_.stageTexture(), field_.camX(), field_.camY(), err)) return false;
         if (dbg.startForm > 0) battle_.debugSetForm(std::min(dbg.startForm, kMaxEvo));
         if (dbg.fullDv) battle_.debugFillDv();
+        if (dbg.sizePanel) battle_.openSizePanel();
         mode_ = Mode::Battle;
     }
     return true;

@@ -10,6 +10,8 @@
 // Enemies use their own battle model too when one exists (see kEnemyModels in battle.cpp),
 // falling back to the field sprite.
 #pragma once
+#include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -43,6 +45,15 @@ struct FormDef {
     FormAttack atk[3];
 };
 
+// Battle sizes, edited live with the size dashboard (F3 in battle) and saved to data/battle_sizes.cfg.
+// Form sizes are relative units (Rookie, Champion, Ultimate, Mega); unit = screen pixels per 1.0.
+struct BattleSizes {
+    float form[4] = {0.6f, 1.5f, 2.1f, 2.6f};
+    float enemy = 1.f;  // enemy form size x this
+    float boss = 1.3f;  // bosses x this on top
+    float unit = 46.f;
+};
+
 class Battle {
 public:
     Battle(SpriteCache& sprites, ModelCache& models, Party& party) : sprites_(sprites), models_(models), party_(party) {}
@@ -56,6 +67,10 @@ public:
     // Testing helpers.
     void debugFillDv() { me_.dv = 100.f; }
     void debugSetForm(int evo) { setEvo(evo); }
+    // Size dashboard.
+    void setSizeFile(std::filesystem::path p);
+    void openSizePanel() { devTools_ = sizePanel_ = true; }
+    void enableDevTools() { devTools_ = true; }  // F3 size dashboard; never on for players
 
 private:
     struct Fighter {
@@ -114,6 +129,14 @@ private:
     void updateEvoSeq();
     void startEvoSeq(int to);
     void startFoeEvo();
+    float formHeight(int evo) const { return sizes_.unit * sizes_.form[std::clamp(evo, 0, 3)]; }
+    float foeHeight(int evo) const { return formHeight(evo) * sizes_.enemy * (foe_.boss ? sizes_.boss : 1.f); }
+    bool loadSizes();
+    bool saveSizes() const;
+    void applySizes();
+    void setFoeForm(bool evolved);
+    void updateSizePanel(const Input& in);
+    void renderSizePanel();
     void applyFoeEvo();
     void startPlayerAttack(int slot);
     void resolvePlayerAttack();
@@ -150,6 +173,15 @@ private:
     const char* foeEvoEffect_ = nullptr;
     float foeEvoEffectScale_ = 0;
     bool foeEvolved_ = false;
+    const char* foeBaseModel_ = nullptr;
+    float foeFxBase_ = 0, foeEvoFxBase_ = 0;
+    // Size dashboard.
+    BattleSizes sizes_;
+    std::filesystem::path sizeFile_;
+    bool devTools_ = false, sizePanel_ = false, sizeLayout_ = false;
+    int sizeSel_ = 0;
+    std::string sizeMsg_;
+    int sizeMsgT_ = 0;
     float darken_ = 0;  // extra screen dim during digivolution
     enum class Phase { Intro, Fight, Ending } phase_ = Phase::Intro;
     int phaseTimer_ = 0, shake_ = 0, screenFlash_ = 0;

@@ -162,6 +162,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
         else if (a[i] == "--form" && i + 1 < a.size()) { dbg.startBattle = true; dbg.startForm = std::stoi(a[++i]); }
         else if (a[i] == "--digivolve-at" && i + 1 < a.size()) digivolveAt = std::stoi(a[++i]);
         else if (a[i] == "--battle") dbg.startBattle = true;
+        else if (a[i] == "--sizes") { dbg.startBattle = true; dbg.sizePanel = true; }
+        else if (a[i] == "--dev") dbg.devTools = true;
         else if (a[i] == "--boss" && i + 1 < a.size()) { dbg.startBattle = true; dbg.battleSprite = a[++i]; }
     }
     if (!shotPath.empty() && shotFrames <= 0) shotFrames = 120;

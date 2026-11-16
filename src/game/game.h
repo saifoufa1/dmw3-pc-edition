@@ -14,6 +14,8 @@ struct DebugOptions {
     std::string battleSprite = "P171BAGM";
     bool fullDv = false;        // start battles with a full digivolve gauge
     int startForm = 0;          // start battles already digivolved (0 = Rookie .. 3 = Mega)
+    bool sizePanel = false;     // open the battle size dashboard (F3) at once
+    bool devTools = false;      // --dev: developer tools (F3 size dashboard); off for players
 };
 
 class Game {

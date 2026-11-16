@@ -1,5 +1,8 @@
 #include "game/battle.h"
 
+#include <fstream>
+#include <sstream>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -12,7 +15,6 @@ namespace {
 // button panel; the top keeps the fighter's head below the HP bars (see clampArena).
 constexpr float kArenaL = 22, kArenaR = 298, kArenaT = 112, kArenaB = 198;
 constexpr float kHudTop = 50;           // fighters' heads stay below this line
-constexpr float kRookieHeightPx = 27.6f;  // on-screen height of a Rookie model; forms grow by EvoStage::scale
 // Heights the technique effect scales were tuned at (Rookie..Mega); effects scale with the form.
 constexpr float kFxTunedH[4] = {40, 58, 76, 96};
 constexpr int kRevertHold = 60;        // hold digivolve this many ticks to go back to Rookie
@@ -146,14 +148,17 @@ bool Battle::start(const BattleRequest& req, const Texture* backdrop, float bgX,
     foe_.aiTimer = 50;
     foeEffect_ = nullptr;
     foeEffectScale_ = 0;
-    foeEvoModel_ = foeEvoName_ = foeEvoEffect_ = nullptr;
+    foeEvoModel_ = foeEvoName_ = foeEvoEffect_ = foeBaseModel_ = nullptr;
     foeEvolved_ = false;
     for (const EnemyModelDef& d : kEnemyModels) {
         if (req.enemySprite != d.sprite) continue;
         foe_.model = models_.get(d.model);
         if (!foe_.model) break;  // no model on disk: field sprite
         // An enemy Rookie is exactly as tall as the partner Rookie; bosses are a bit bigger.
-        foe_.heightPx = kRookieHeightPx * (req.boss ? 1.3f : 1.f);
+        foe_.heightPx = foeHeight(0);
+        foeBaseModel_ = d.model;
+        foeFxBase_ = d.effectScale;
+        foeEvoFxBase_ = d.evoEffectScale;
         foe_.scale = foe_.heightPx / 35.f;  // keeps the AI's reach/spacing in proportion
         foe_.yaw = yawFor(-1, -0.3f);
         foeEffect_ = d.effect;
@@ -199,7 +204,7 @@ void Battle::setEvo(int evo) {
     const FormDef* f = form();
     me_.model = f->model[0] ? models_.get(f->model) : nullptr;
     me_.tint = me_.model ? 0xffffffffu : next.tint;
-    me_.heightPx = kRookieHeightPx * next.scale;
+    me_.heightPx = formHeight(evo);
     me_.clip = -1;
     me_.act = -1;
     if (me_.model) setClip(me_, kClipIdle, 0.6f, true);
@@ -422,7 +427,7 @@ void Battle::startEvoSeq(int to) {
     seq_.to = to;
     seq_.len = seq_.up ? 200 : 110;
     seq_.fromH = me_.heightPx;
-    seq_.toH = kRookieHeightPx * evoStage(to).scale;
+    seq_.toH = formHeight(to);
     seq_.fromName = formNameOf(seq_.from);
     seq_.toName = formNameOf(to);
     me_.act = -1;
@@ -444,7 +449,7 @@ void Battle::startFoeEvo() {
     seq_.up = true;
     seq_.len = 200;
     seq_.fromH = foe_.heightPx;
-    seq_.toH = kRookieHeightPx * evoStage(1).scale * (foe_.boss ? 1.3f : 1.f);
+    seq_.toH = foeHeight(1);
     seq_.fromName = foe_.name;
     seq_.toName = foeEvoName_;
     foe_.act = -1;
@@ -470,6 +475,7 @@ void Battle::applyFoeEvo() {
     foe_.scale = seq_.toH / 35.f;
     foeEffect_ = foeEvoEffect_;
     foeEffectScale_ = foeEvoEffectScale_ * seq_.toH / kFxTunedH[1];
+    foeEvolved_ = true;
     setClip(foe_, kClipIdle, 0.6f, true);
 }
 
@@ -695,6 +701,24 @@ void Battle::update(const Input& in) {
     if (screenFlash_ > 0) --screenFlash_;
     for (int& b : btnFx_) b += b > 0 ? -1 : b < 0 ? 1 : 0;
     if (moveNameT_ > 0) --moveNameT_;
+    if (devTools_ && in.keyP[0x72]) sizePanel_ = !sizePanel_;  // F3: size dashboard (developer builds/runs only)
+    if (sizeMsgT_ > 0) --sizeMsgT_;
+    if (sizePanel_ && !seq_.active) {  // the fight pauses; the models keep breathing
+        if (!sizeLayout_) {  // stand both fighters side by side, left of the panel
+            sizeLayout_ = true;
+            me_.a.x = 62; me_.a.y = 192;
+            foe_.a.x = 140; foe_.a.y = 192;
+            shots_.clear();
+            me_.act = foe_.act = -1;
+            foe_.dashTimer = 0;
+        }
+        if (phase_ == Phase::Intro) phase_ = Phase::Fight;
+        updateSizePanel(in);
+        animateModel(me_);
+        animateModel(foe_);
+        return;
+    }
+    sizeLayout_ = false;
 
     if (seq_.active) {
         // The world holds its breath while the partner digivolves.
@@ -826,6 +850,15 @@ void Battle::render() {
         dirVector(me_.a.dir, fx, fy);
         gfx::drawGlow(me_.cx() + fx * 18 * me_.scale - camX, me_.cy() + fy * 8 - camY, 10 * me_.scale, rgba(255, 255, 255, 140));
     }
+    if (sizePanel_) {  // measuring lines: feet and head of each fighter
+        for (const Fighter* f : {&me_, &foe_}) {
+            const uint32_t c = f == &me_ ? rgba(80, 220, 255, 200) : rgba(255, 120, 90, 200);
+            const float w = std::max(24.f, f->bodyH() * 0.7f);
+            gfx::fillRect(f->a.x - w * 0.5f - camX, f->a.y - camY, w, 1, c);
+            gfx::fillRect(f->a.x - w * 0.5f - camX, f->a.y - f->bodyH() - camY, w, 1, c);
+            gfx::fillRect(f->a.x - w * 0.5f - camX, f->a.y - f->bodyH() - camY, 1, f->bodyH(), c);
+        }
+    }
     for (const auto& s : shots_) {
         if (s.fx) {  // the original technique model
             gfx::drawGlow(s.x - camX, s.y - camY, s.r * 2.0f, (s.color & 0x00ffffffu) | 0x50000000u);
@@ -876,7 +909,7 @@ void Battle::renderHud(int ww, int wh) {
     static const uint32_t kPadCol[3] = {rgba(70, 150, 255), rgba(255, 80, 70), rgba(255, 205, 40)};
     const int S = std::max(1, gfx::pixelScale());
     const bool fighting = phase_ == Phase::Fight && !seq_.active;
-    for (int s = 0; s < 3; ++s) {
+    for (int s = 0; s < 3 && !sizePanel_; ++s) {
         const FormAttack& atk = form()->atk[s];
         const bool cooling = me_.cd[s] > 0, noMp = me_.mp < atk.mp;
         const bool can = fighting && !cooling && !noMp && me_.act < 0;
@@ -924,7 +957,7 @@ void Battle::renderHud(int ww, int wh) {
             gfx::drawText(x1 - pad - int(std::strlen(buf)) * gfx::kCharW, line2, buf, rgba(200, 200, 200));
         }
     }
-    {
+    if (!sizePanel_) {
         int hx, hy;
         gfx::toWindow(160, kBtnY + kBtnH + 3, hx, hy);
         gfx::drawTextCentered(hx, hy + 11, me_.evo > 0 ? "Move WASD (Shift run)   Guard Space/LB   Digivolve U/RB   Hold U: back to Rookie"
@@ -979,8 +1012,186 @@ void Battle::renderHud(int ww, int wh) {
         gfx::drawTextCentered(x, y, banner_.c_str(), won_ || phase_ == Phase::Intro ? 0xff40ffffu : 0xff4040ffu);
         if (phase_ == Phase::Ending && phaseTimer_ < 100) gfx::drawTextCentered(x, y + 24, "[Space] continue", 0xffffffffu);
     }
+    if (sizePanel_) renderSizePanel();
     (void)ww;
     (void)wh;
+}
+
+// ---------------------------------------------------------------- size dashboard
+namespace {
+const char* kSizeKeys[7] = {"rookie", "champion", "ultimate", "mega", "enemy", "boss", "unit"};
+constexpr float kPanelX = 190, kPanelY = 44, kPanelW = 126, kRowH = 13;
+constexpr int kSizeRows = 7;
+}  // namespace
+
+void Battle::setSizeFile(std::filesystem::path p) {
+    sizeFile_ = std::move(p);
+    loadSizes();
+}
+
+bool Battle::loadSizes() {
+    std::ifstream f(sizeFile_);
+    if (!f) return false;
+    std::string line;
+    while (std::getline(f, line)) {
+        std::istringstream ss(line);
+        std::string k;
+        float v;
+        if (!(ss >> k >> v) || k[0] == '#') continue;
+        for (int i = 0; i < kSizeRows; ++i) {
+            if (k != kSizeKeys[i]) continue;
+            if (i < 4) sizes_.form[i] = v;
+            else if (i == 4) sizes_.enemy = v;
+            else if (i == 5) sizes_.boss = v;
+            else sizes_.unit = v;
+        }
+    }
+    return true;
+}
+
+bool Battle::saveSizes() const {
+    std::ofstream f(sizeFile_);
+    if (!f) return false;
+    f << "# DMW3 PC Edition battle sizes - edit live in battle with F3 (size dashboard), or by hand.\n"
+         "# rookie..mega: form sizes in units (Agumon, Greymon, MetalGreymon, WarGreymon)\n"
+         "# enemy: enemy size x this   boss: bosses x this on top   unit: screen pixels per 1.0\n";
+    for (int i = 0; i < 4; ++i) f << kSizeKeys[i] << ' ' << sizes_.form[i] << '\n';
+    f << "enemy " << sizes_.enemy << "\nboss " << sizes_.boss << "\nunit " << sizes_.unit << '\n';
+    return bool(f);
+}
+
+void Battle::applySizes() {
+    me_.heightPx = formHeight(me_.evo);
+    if (foe_.model) {
+        foe_.heightPx = foeHeight(foeEvolved_ ? 1 : 0);
+        foe_.scale = foe_.heightPx / 35.f;
+        foeEffectScale_ = (foeEvolved_ ? foeEvoFxBase_ : foeFxBase_) * foe_.heightPx / kFxTunedH[foeEvolved_ ? 1 : 0];
+    }
+    clampArena(me_);
+    clampArena(foe_);
+}
+
+// Enemy preview: its Rookie or its digivolved form, without the sequence.
+void Battle::setFoeForm(bool evolved) {
+    if (evolved && foeEvoModel_ && !foeEvolved_) {
+        seq_.toH = foeHeight(1);
+        applyFoeEvo();
+    } else if (!evolved && foeEvolved_ && foeBaseModel_) {
+        if (auto m = models_.get(foeBaseModel_)) {
+            foe_.model = m;
+            foe_.clip = -1;
+            foeEvolved_ = false;
+            foeEffect_ = "EFFECT/MEFT0328";
+            setClip(foe_, kClipIdle, 0.6f, true);
+        }
+    }
+    seq_ = {};
+    applySizes();
+}
+
+void Battle::updateSizePanel(const Input& in) {
+    float* vals[kSizeRows] = {&sizes_.form[0], &sizes_.form[1], &sizes_.form[2], &sizes_.form[3], &sizes_.enemy, &sizes_.boss, &sizes_.unit};
+    const bool shift = in.key[0x10];
+    int delta = 0, row = -1;
+    if (in.keyP[0x26]) sizeSel_ = (sizeSel_ + kSizeRows - 1) % kSizeRows;  // Up
+    if (in.keyP[0x28]) sizeSel_ = (sizeSel_ + 1) % kSizeRows;              // Down
+    if (in.keyP[0x25]) { delta = -1; row = sizeSel_; }                      // Left
+    if (in.keyP[0x27]) { delta = 1; row = sizeSel_; }                       // Right
+    // mouse: [-] / [+] on each row, form chips and buttons at the bottom
+    const float top = kPanelY + 16;
+    if (in.lmbP && in.mx >= kPanelX && in.mx < kPanelX + kPanelW) {
+        const int r = int((in.my - top) / kRowH);
+        if (in.my >= top && r >= 0 && r < kSizeRows) {
+            sizeSel_ = r;
+            if (in.mx >= kPanelX + 74 && in.mx < kPanelX + 86) { delta = -1; row = r; }
+            if (in.mx >= kPanelX + 112 && in.mx < kPanelX + 124) { delta = 1; row = r; }
+        }
+        const float fy = top + kSizeRows * kRowH + 6;
+        if (in.my >= fy && in.my < fy + 12) {
+            const int b = int((in.mx - kPanelX - 3) / 24);
+            if (b >= 0 && b < 4) setEvo(b);
+            if (b == 4) setFoeForm(!foeEvolved_);
+        }
+        const float by = top + kSizeRows * kRowH + 24;
+        if (in.my >= by && in.my < by + 12) {
+            const int b = int((in.mx - kPanelX - 3) / 40);
+            if (b == 0) { sizeMsg_ = saveSizes() ? "Saved " + sizeFile_.filename().string() : "Save failed"; sizeMsgT_ = 120; }
+            if (b == 1) { sizeMsg_ = loadSizes() ? "Reloaded" : "No file yet"; sizeMsgT_ = 90; applySizes(); }
+            if (b == 2) { sizes_ = BattleSizes{}; sizeMsg_ = "Defaults"; sizeMsgT_ = 90; applySizes(); }
+        }
+    }
+    if (row >= 0) {
+        const float step = row == 6 ? (shift ? 5.f : 1.f) : (shift ? 0.25f : 0.05f);
+        *vals[row] = std::max(row == 6 ? 4.f : 0.05f, *vals[row] + step * float(delta));
+        *vals[row] = std::round(*vals[row] * 1000.f) / 1000.f;
+        applySizes();
+    }
+    // keyboard shortcuts: 1-4 preview partner form, E enemy form, Ctrl+S save, R reload
+    for (int i = 0; i < 4; ++i)
+        if (in.keyP['1' + i]) setEvo(i);
+    if (in.keyP['E']) setFoeForm(!foeEvolved_);
+    if (in.key[0x11] && in.keyP['S']) { sizeMsg_ = saveSizes() ? "Saved " + sizeFile_.filename().string() : "Save failed"; sizeMsgT_ = 120; }
+    if (in.keyP['R'] && !in.key[0x11]) { sizeMsg_ = loadSizes() ? "Reloaded" : "No file yet"; sizeMsgT_ = 90; applySizes(); }
+}
+
+void Battle::renderSizePanel() {
+    char buf[96];
+    int x0, y0, x1, y1;
+    auto box = [&](float vx, float vy, float vw, float vh, uint32_t c) {
+        gfx::toWindow(vx, vy, x0, y0);
+        gfx::toWindow(vx + vw, vy + vh, x1, y1);
+        gfx::fillRect(float(x0), float(y0), float(x1 - x0), float(y1 - y0), c);
+    };
+    auto text = [&](float vx, float vy, const char* s, uint32_t c) {
+        int x, y;
+        gfx::toWindow(vx, vy, x, y);
+        gfx::drawText(x, y + 11, s, c);
+    };
+    auto ctext = [&](float vx, float vy, const char* s, uint32_t c) {
+        int x, y;
+        gfx::toWindow(vx, vy, x, y);
+        gfx::drawTextCentered(x, y + 11, s, c);
+    };
+    const float top = kPanelY + 16;
+    const float panelH = 16 + kSizeRows * kRowH + 44;
+    box(kPanelX, kPanelY, kPanelW, panelH, rgba(8, 12, 26, 225));
+    box(kPanelX, kPanelY, kPanelW, 13, rgba(40, 90, 170, 240));
+    text(kPanelX + 4, kPanelY + 3, "SIZE DASHBOARD  (F3)", 0xffffffffu);
+    const float vals[kSizeRows] = {sizes_.form[0], sizes_.form[1], sizes_.form[2], sizes_.form[3], sizes_.enemy, sizes_.boss, sizes_.unit};
+    for (int r = 0; r < kSizeRows; ++r) {
+        const float y = top + r * kRowH;
+        const bool sel = r == sizeSel_;
+        const bool current = r < 4 && r == me_.evo;
+        if (sel) box(kPanelX + 1, y - 1, kPanelW - 2, kRowH, rgba(60, 110, 200, 110));
+        std::string label = r < 4 ? formNameOf(r) : r == 4 ? "Enemy x" : r == 5 ? "Boss x" : "Unit px";
+        if (label.size() > 12) label = label.substr(0, 12);
+        text(kPanelX + 4, y + 2, label.c_str(), current ? 0xff40ffffu : 0xffe0e0e0u);
+        box(kPanelX + 74, y + 1, 12, kRowH - 3, rgba(90, 40, 40, 230));
+        ctext(kPanelX + 80, y + 2, "-", 0xffffffffu);
+        std::snprintf(buf, sizeof buf, r == 6 ? "%.0f" : "%.2f", vals[r]);
+        ctext(kPanelX + 99, y + 2, buf, 0xffffffffu);
+        box(kPanelX + 112, y + 1, 12, kRowH - 3, rgba(40, 90, 40, 230));
+        ctext(kPanelX + 118, y + 2, "+", 0xffffffffu);
+    }
+    const float fy = top + kSizeRows * kRowH + 6;
+    static const char* kChip[5] = {"1", "2", "3", "4", "E"};
+    for (int b = 0; b < 5; ++b) {
+        const bool on = b < 4 ? me_.evo == b : foeEvolved_;
+        box(kPanelX + 3 + b * 24, fy, 22, 12, on ? rgba(230, 190, 40, 240) : rgba(50, 50, 70, 230));
+        ctext(kPanelX + 14 + b * 24, fy + 2, kChip[b], on ? rgba(10, 10, 20) : 0xffffffffu);
+    }
+    const float by = top + kSizeRows * kRowH + 24;
+    static const char* kBtn[3] = {"Save", "Reload", "Reset"};
+    for (int b = 0; b < 3; ++b) {
+        box(kPanelX + 3 + b * 40, by, 38, 12, rgba(40, 70, 120, 240));
+        ctext(kPanelX + 22 + b * 40, by + 2, kBtn[b], 0xffffffffu);
+    }
+    std::snprintf(buf, sizeof buf, "You %.0fpx  Enemy %.0fpx", me_.bodyH(), foe_.bodyH());
+    box(kPanelX, kPanelY + panelH, kPanelW, sizeMsgT_ > 0 ? 40 : 31, rgba(8, 12, 26, 190));
+    text(kPanelX + 3, kPanelY + panelH + 3, buf, 0xffb0e0ffu);
+    text(kPanelX + 3, kPanelY + panelH + 12, "Arrows/click change, Shift x5", 0xffa0a0a0u);
+    text(kPanelX + 3, kPanelY + panelH + 21, "1-4 form  E enemy  Ctrl+S", 0xffa0a0a0u);
+    if (sizeMsgT_ > 0) text(kPanelX + 3, kPanelY + panelH + 30, sizeMsg_.c_str(), 0xff40ffffu);
 }
 
 }  // namespace dw3

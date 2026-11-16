@@ -44,6 +44,7 @@ The game starts in Asuka City (S200, with S202 and S218).
    build.bat
    ```
 3. Run `build\dmw3.exe` (optional: `--stage S400`, or test a fight directly: `--battle`, `--boss P123DIGM`, `--form 1` = start as Greymon, `--dv` = full digivolve gauge).
+   Developer only: `--dev` enables the battle **size dashboard** (F3 in a fight: live +/- per form, enemy, boss, unit px; 1-4 preview forms, E enemy form, Ctrl+S saves `data/battle_sizes.cfg`); `--sizes` opens a fight with it already open. Players never see it without these flags.
 
 `build\dw3check.exe` validates your data and all parsers; `--dump-stage S200 out.bmp` / `--dump-sprite P006AGUM out.bmp` / `--dump-model M005GREY out.bmp` (every animation clip as a sheet) render assets for inspection.
 
