@@ -128,6 +128,10 @@ char 46 is "Mika"). The creator maps charId through the callbacks at stage descr
 **Flag list** (conditions and assignments): `{u16 flag, u16 value}` pairs ended by `flag = 0xFFFF`. A condition
 list holds when every `flag == value`. Flags look like `0xGGBB` (group, bit): story-phase flags `0x60xx/0x70xx`
 (e.g. `6004` = first visit of Asuka City, then `600c`, `600e`, `7015`, ...), event flags `0x1Axx`, `0x72xx`...
+In WSTAG210 (Main Lobby) every slot lists its variants in story order and the first variant whose list holds is
+the one shown: `6002` = lobby before the partner download, `6004` = after it (two Digimon NPCs appear next to the
+floor mark only with `6004`). Phase flags look cumulative (earlier ones stay set). Medium confidence (observed
+from the tables and the reference playthrough, not from the creator code).
 Flags `< 0x0100` (e.g. `0000`, `0010`, `0011`) are used like per-NPC "talked before" flags — medium confidence;
 the engine keeps them per stage+slot.
 

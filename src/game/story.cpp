@@ -1,11 +1,13 @@
 #include "game/story.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 
+#include "game/digimon_db.h"
 #include "render/gl_renderer.h"
 
 namespace fs = std::filesystem;
@@ -86,6 +88,7 @@ bool Story::load(const fs::path& file, TextDb* text, std::string& err) {
     if (!f) { err = "cannot open " + file.string(); return false; }
     file_ = file.filename().string();
     actors_.clear(); events_.clear(); gates_.clear(); starters_.clear(); talkBanks_.clear(); initG_.clear();
+    packBlock_.clear();
     skipFlags_.clear(); skipDone_.clear(); skipObjective_.clear();
     std::string line;
     int ln = 0;
@@ -127,6 +130,9 @@ bool Story::load(const fs::path& file, TextDb* text, std::string& err) {
         else if (k == "gflag" && t.size() >= 3) initG_[uint32_t(std::strtoul(t[1].c_str(), nullptr, 16))] = uint16_t(toInt(t[2]));
         else if (k == "chapter") chapterInit_ = t.size() > 2 ? unq(t[2]) : "";
         else if (k == "starter" && t.size() >= 3) starters_.push_back({t[1], unq(t[2])});
+        else if (k == "packblock" && t.size() >= 3) {  // packblock A 3 B 4 C 5 default 4
+            for (size_t i = 1; i + 1 < t.size(); i += 2) packBlock_[t[i] == "default" ? "" : t[i]] = t[i + 1];
+        }
         else if (k == "newgame" && t.size() >= 3) {  // what New Game (PC flow, opening skipped) starts with
             if (t[1] == "flags") for (size_t i = 2; i < t.size(); ++i) skipFlags_.push_back(t[i]);
             else if (t[1] == "done") for (size_t i = 2; i < t.size(); ++i) skipDone_.push_back(t[i]);
@@ -256,8 +262,13 @@ bool Story::saveGame(const fs::path& p, const std::string& stage, int x, int y) 
     f << "partner " << party_.partnerId << ' ' << party_.partnerName << "\n";
     if (!account_.empty()) f << "account " << account_ << "\n";
     if (!party_.pack.empty()) f << "pack " << party_.pack << "\n";
-    for (const auto& m : party_.team) f << "member " << m.sprite << ' ' << m.name << "\n";
+    // member SPRITE LEVEL EXP HP MP ATK DEF SPD Name   (each Digimon keeps its own level, EXP and stats)
+    for (const auto& m : party_.team)
+        f << "member " << m.sprite << ' ' << m.level << ' ' << m.exp << ' ' << m.stats.hp << ' ' << m.stats.mp << ' '
+          << m.stats.atk << ' ' << m.stats.def << ' ' << m.stats.spd << ' ' << m.name << "\n";
     if (!party_.team.empty()) f << "active " << party_.active << "\n";
+    f << "partners " << (party_.partnersOut ? 1 : 0) << "\n";
+    f << "playtime " << party_.playSeconds << "\n";
     f << "wins " << party_.wins << "\n";
     f << "level " << party_.level << " " << party_.exp << " " << party_.bits << "\n";
     f << "chapter " << chapter_ << "\n";
@@ -283,6 +294,8 @@ bool Story::loadGame(const fs::path& p, std::string& stage, int& x, int& y) {
     party_.team.clear();
     party_.pack.clear();
     party_.active = 0;
+    party_.partnersOut = true;  // old saves: partners already downloaded
+    party_.playSeconds = 0;
     while (std::getline(f, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         const size_t sp = line.find(' ');
@@ -292,8 +305,19 @@ bool Story::loadGame(const fs::path& p, std::string& stage, int& x, int& y) {
         else if (k == "partner") { is >> party_.partnerId; std::getline(is >> std::ws, party_.partnerName); partnerChanged_ = true; }
         else if (k == "account") account_ = v;
         else if (k == "pack") party_.pack = v;
-        else if (k == "member") { TeamMember m; is >> m.sprite; std::getline(is >> std::ws, m.name); party_.team.push_back(m); }
+        else if (k == "member") {
+            TeamMember m;
+            is >> m.sprite >> std::ws;
+            if (std::isdigit(is.peek()))  // new format: level exp hp mp atk def spd, then the name
+                is >> m.level >> m.exp >> m.stats.hp >> m.stats.mp >> m.stats.atk >> m.stats.def >> m.stats.spd;
+            else  // old saves: name only -> species base stats
+                m.stats = digimonDb().make(m.sprite, "").stats;
+            std::getline(is >> std::ws, m.name);
+            party_.team.push_back(m);
+        }
         else if (k == "active") is >> party_.active;
+        else if (k == "partners") { int on = 1; is >> on; party_.partnersOut = on != 0; }
+        else if (k == "playtime") is >> party_.playSeconds;
         else if (k == "wins") is >> party_.wins;
         else if (k == "level") is >> party_.level >> party_.exp >> party_.bits;
         else if (k == "chapter") chapter_ = v;
@@ -314,6 +338,12 @@ std::vector<const StoryActor*> Story::actorsOn(const std::string& stage) const {
     for (const auto& a : actors_)
         if (a.stage == stage && eval(a.when)) out.push_back(&a);
     return out;
+}
+
+bool Story::hasActorAt(const std::string& stage, int x, int y) const {
+    for (const auto& a : actors_)
+        if (a.stage == stage && std::abs(a.def.x - x) < 8 && std::abs(a.def.y - y) < 8) return true;
+    return false;
 }
 
 const StoryActor* Story::actor(const std::string& id) const {
@@ -432,7 +462,15 @@ bool Story::message(const std::string& tok, Message& m) {
         m.ok = true;
         return true;
     }
-    return text_ && text_->get(tok, m);
+    std::string ref = tok;
+    const size_t d = ref.find('$');
+    if (d != std::string::npos) {  // dmg200:$:15 -> the starter pack's own event block (packblock lines)
+        auto it = packBlock_.find(party_.pack);
+        if (it == packBlock_.end()) it = packBlock_.find("");
+        if (it == packBlock_.end()) return false;
+        ref.replace(d, 1, it->second);
+    }
+    return text_ && text_->get(ref, m);
 }
 
 void Story::say(const std::string& speaker, const std::vector<std::string>& pages) {
@@ -442,6 +480,7 @@ void Story::say(const std::string& speaker, const std::vector<std::string>& page
 
 bool Story::sayRef(const std::string& ref, const std::string& fbSpeaker, const std::string& fbText) {
     Message m;
+    if (ref.find('$') != std::string::npos && message(ref, m)) { say(m.speaker, m.pages); return true; }  // pack block
     if (TextDb::isRef(ref) && text_ && text_->get(ref, m)) { say(m.speaker, m.pages); return true; }
     if (!ref.empty() && !TextDb::isRef(ref)) { say(fbSpeaker, ownPages(unq(ref))); return true; }
     say(fbSpeaker, ownPages(fbText.empty() ? "..." : fbText));
@@ -570,6 +609,17 @@ void Story::step() {
                 party_.partnerName = unq(a[1]);
                 partnerChanged_ = true;
             }
+        } else if (c.op == "place" && a.size() >= 2) {
+            place_ = Place{toInt(a[0]), toInt(a[1])};  // move the player inside the current stage (no reload)
+        } else if (c.op == "beam") {
+            // partner download: the team beams in around the player (single-partner tests: the starters)
+            if (party_.team.empty())
+                for (const auto& st : starters_) party_.team.push_back(digimonDb().make(st.sprite, st.name));
+            if (party_.team.empty()) { error(where + "beam: no team and no 'starter' lines"); continue; }
+            party_.setActive(std::clamp(party_.active, 0, int(party_.team.size()) - 1));
+            partnerChanged_ = true;
+            beamReq_ = true;
+            wait_ = Wait::Beam;
         } else if (c.op == "warp" && !a.empty()) warp_ = Warp{a[0], a.size() > 2 ? toInt(a[1], -1) : -1, a.size() > 2 ? toInt(a[2], -1) : -1};
         else if (c.op == "wait") { waitTicks_ = a.empty() ? 30 : toInt(a[0], 30); wait_ = Wait::Ticks; }
         else if (c.op == "save") saveReq_ = true;

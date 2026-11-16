@@ -88,6 +88,8 @@ private:
     void startTalk(size_t npc);
     void handleStoryRequests();
     void updatePartner(float speed);
+    void updateBeam();          // partner download: beams on the floor, the team appears one by one
+    bool partnersVisible() const { return party_.partnersOut || beamT_ >= 0; }
     void updateCamera();
     void updateEditor(const Input& in);
     void renderEditor();
@@ -109,6 +111,8 @@ private:
     std::vector<std::string> spriteByNumber_;  // P### -> FIELD/SPRT id ("" if none)
 
     Actor player_, partner_;
+    std::vector<Actor> followers_;  // the other team members, walking behind the active partner
+    int beamT_ = -1;                // >= 0: partner download running (ticks)
     std::vector<NpcRt> npcs_;
     std::deque<std::pair<float, float>> trail_;
     std::set<std::string> defeated_;

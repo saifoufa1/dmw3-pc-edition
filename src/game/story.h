@@ -85,6 +85,7 @@ public:
     int startX() const { return startX_; }
     int startY() const { return startY_; }
     std::vector<const StoryActor*> actorsOn(const std::string& stage) const;
+    bool hasActorAt(const std::string& stage, int x, int y) const;  // any story actor (any condition) on that spot
     int revision() const { return revision_; }
     int talkBank(const std::string& stage) const;  // -1 = none
     bool exitBlocked(const std::string& stage, const std::string& target, std::string& msg) const;
@@ -123,12 +124,17 @@ public:
     struct Warp { std::string stage; int x = -1, y = -1; };
     std::optional<Warp> takeWarp() { auto r = warp_; warp_.reset(); return r; }
     bool takePartnerChanged() { bool r = partnerChanged_; partnerChanged_ = false; return r; }
+    struct Place { int x = 0, y = 0; };
+    std::optional<Place> takePlace() { auto r = place_; place_.reset(); return r; }  // `place X Y`
+    // `beam`: the field plays the partner download (beams on the floor) and calls beamDone() when finished.
+    bool takeBeam() { bool r = beamReq_; beamReq_ = false; return r; }
+    void beamDone() { if (wait_ == Wait::Beam) wait_ = Wait::None; }
     bool takeSaveRequest() { bool r = saveReq_ && autosave_; saveReq_ = false; return r; }
     void setAutosave(bool on) { autosave_ = on; }  // off for test runs (--story-flags / --story-event)
     const StoryActor* actor(const std::string& id) const;
 
 private:
-    enum class Wait { None, Dialogue, Title, Partner, Fight, Ticks };
+    enum class Wait { None, Dialogue, Title, Partner, Fight, Ticks, Beam };
     bool eval(const std::vector<StoryCond>& c, const std::string& stage = "", int slot = -1) const;
     bool start(StoryTrigger t, const std::string& arg, const std::string& stage = "", float x = 0, float y = 0);
     void begin(size_t eventIndex);
@@ -152,6 +158,7 @@ private:
     std::vector<Starter> starters_;
     std::map<std::string, int> talkBanks_;
     std::map<uint32_t, uint16_t> initG_;
+    std::map<std::string, std::string> packBlock_;  // `packblock A 3 ...`: "$" in message refs -> the pack's block
     std::string chapterInit_;
 
     // state (saved)
@@ -180,6 +187,8 @@ private:
     std::vector<Actor> starterActors_;
     std::optional<std::string> fight_;
     std::optional<Warp> warp_;
+    std::optional<Place> place_;
+    bool beamReq_ = false;
     bool partnerChanged_ = false, saveReq_ = false, autosave_ = true;
     std::string errorText_;
     int errorTimer_ = 0;

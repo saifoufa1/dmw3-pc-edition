@@ -119,14 +119,30 @@ void Field::addOriginalNpcs() {
         if (!first.count(a.slot * 1000 + a.charId)) first[a.slot * 1000 + a.charId] = &a;
     }
     for (const auto& [slot, v] : votes) {
-        int best = -1, n = 0;
-        for (const auto& [cid, c] : v)
-            if (c > n) { n = c; best = cid; }
-        const OverlayActor* a = first[slot * 1000 + best];
+        const OverlayActor* a = nullptr;
+        if (story_) {
+            // With a story: the first variant (record order) whose show conditions hold on the original game flags
+            // (e.g. the lobby before / after the partner download, gflags 6002 / 6004). None = not here now.
+            for (const auto& c : overlay_.actors) {
+                if (c.slot != slot || c.charId == 1) continue;
+                bool show = true;
+                for (const auto& f : c.show)
+                    show = show && story_->gflag(Story::gkey(stageIds_[stageIndex_], slot, f.flag)) == f.value;
+                if (show) { a = &c; break; }
+            }
+            if (!a) continue;
+        } else {
+            int best = -1, n = 0;
+            for (const auto& [cid, c] : v)
+                if (c > n) { n = c; best = cid; }
+            a = first[slot * 1000 + best];
+        }
+        if (a->x == 0 && a->y == 0) continue;  // off-map record (spawned by an event)
         const size_t num = size_t(a->charId & 0xFF);
         if (num >= spriteByNumber_.size() || spriteByNumber_[num].empty()) continue;
         bool taken = false;  // a hand-placed NPC of the .stage file already stands here
         for (const auto& o : data_.npcs) taken = taken || (std::abs(o.x - a->x) < 8 && std::abs(o.y - a->y) < 8);
+        if (story_ && story_->hasActorAt(stageIds_[stageIndex_], a->x, a->y)) taken = true;  // the story's own NPC
         if (taken) continue;
         NpcDef d;
         d.kind = NpcKind::Talk;
@@ -238,6 +254,50 @@ void Field::reloadPartner() {
     if (auto sp = sprites_.get(party_.partnerId)) partner_.sprite = sp;
     partner_.anim = -1;
     partner_.tick();
+    // the rest of the team walks behind the active partner (in team order)
+    std::vector<Actor> old = std::move(followers_);
+    followers_.clear();
+    for (int i = 0; i < int(party_.team.size()); ++i) {
+        if (i == party_.active) continue;
+        Actor a;
+        a.sprite = sprites_.get(party_.team[size_t(i)].sprite);
+        if (!a.sprite) continue;
+        const size_t k = followers_.size();
+        a.x = k < old.size() ? old[k].x : partner_.x;
+        a.y = k < old.size() ? old[k].y : partner_.y;
+        a.dir = k < old.size() ? old[k].dir : partner_.dir;
+        a.tick();
+        followers_.push_back(a);
+    }
+}
+
+// Partner download (story `beam`, reference shots 44-45): the team appears one by one around the player, each in a
+// blue data beam on the floor. Not decoded: the original beam effect (ours = a simple glowing column + flash).
+namespace {
+constexpr int kBeamEach = 50;                                         // ticks per Digimon
+constexpr float kBeamSpot[3][2] = {{-34, -6}, {-8, -24}, {-48, 12}};  // around the player (map pixels)
+}  // namespace
+
+void Field::updateBeam() {
+    if (beamT_ < 0) return;
+    const int n = 1 + int(followers_.size());
+    if (beamT_ == 0) {  // stand the team on its spots
+        for (int i = 0; i < n; ++i) {
+            Actor& a = i == 0 ? partner_ : followers_[size_t(i - 1)];
+            a.x = player_.x + kBeamSpot[i % 3][0];
+            a.y = player_.y + kBeamSpot[i % 3][1];
+            if (!walkable(a.x, a.y)) { a.x = player_.x; a.y = player_.y; }
+            a.dir = SE;
+            a.move = Move::Idle;
+        }
+        trail_.clear();
+    }
+    ++beamT_;
+    if (beamT_ >= kBeamEach * n + 20) {
+        beamT_ = -1;
+        party_.partnersOut = true;
+        if (story_) story_->beamDone();
+    }
 }
 
 void Field::saveStory() {
@@ -313,6 +373,8 @@ void Field::handleStoryRequests() {
     if (!story_) return;
     if (story_->takePartnerChanged()) reloadPartner();
     if (auto w = story_->takeWarp()) warpTo(w->stage, w->x, w->y);
+    if (auto p = story_->takePlace()) placeParty(float(p->x), float(p->y));
+    if (story_->takeBeam()) { reloadPartner(); beamT_ = 0; }
     if (story_->takeSaveRequest()) saveStory();
     if (story_->revision() != storyRev_ && !battle_) buildNpcs();
     if (auto id = story_->takeFight()) {
@@ -356,6 +418,13 @@ void Field::placeParty(float x, float y) {
     player_.x = x; player_.y = y; player_.move = Move::Idle;
     partner_.x = x + 12; partner_.y = y + 6; partner_.move = Move::Idle;
     if (!walkable(partner_.x, partner_.y)) { partner_.x = x; partner_.y = y; }
+    for (size_t i = 0; i < followers_.size(); ++i) {
+        followers_[i].x = x + 12 + 8.f * float(i + 1);
+        followers_[i].y = y + 6 + 5.f * float(i + 1);
+        if (!walkable(followers_[i].x, followers_[i].y)) { followers_[i].x = partner_.x; followers_[i].y = partner_.y; }
+        followers_[i].move = Move::Idle;
+        followers_[i].tick();
+    }
     trail_.clear();
     player_.tick();
     partner_.tick();
@@ -400,16 +469,21 @@ void Field::endBattle(bool won) {
 }
 
 void Field::updatePartner(float speed) {
-    if (trail_.size() <= kTrailGap) { partner_.move = Move::Idle; return; }
-    auto [tx, ty] = trail_[trail_.size() - 1 - kTrailGap];
-    float dx = tx - partner_.x, dy = ty - partner_.y;
-    float d = std::sqrt(dx * dx + dy * dy);
-    if (d < 1.0f) { partner_.move = Move::Idle; return; }
-    float step = std::min(d, std::max(speed, d * 0.25f));
-    partner_.x += dx / d * step;
-    partner_.y += dy / d * step;
-    partner_.dir = dirFromVector(dx, dy);
-    partner_.move = step > kWalkSpeed * 1.4f ? Move::Run : Move::Walk;
+    // the active partner walks kTrailGap samples behind the player, each other team member one gap further
+    auto follow = [&](Actor& a, size_t gap) {
+        if (trail_.size() <= gap) { a.move = Move::Idle; return; }
+        auto [tx, ty] = trail_[trail_.size() - 1 - gap];
+        float dx = tx - a.x, dy = ty - a.y;
+        float d = std::sqrt(dx * dx + dy * dy);
+        if (d < 1.0f) { a.move = Move::Idle; return; }
+        float step = std::min(d, std::max(speed, d * 0.25f));
+        a.x += dx / d * step;
+        a.y += dy / d * step;
+        a.dir = dirFromVector(dx, dy);
+        a.move = step > kWalkSpeed * 1.4f ? Move::Run : Move::Walk;
+    };
+    follow(partner_, kTrailGap);
+    for (size_t i = 0; i < followers_.size(); ++i) follow(followers_[i], kTrailGap * (i + 2));
 }
 
 void Field::updateCamera() {
@@ -457,15 +531,17 @@ void Field::update(const Input& in) {
     if (story_ && story_->busy() && !editor_) {
         story_->update(in);
         handleStoryRequests();
+        updateBeam();
         player_.move = partner_.move = Move::Idle;
         player_.tick();
         partner_.tick();
+        for (auto& f : followers_) { f.move = Move::Idle; f.tick(); }
         for (auto& n : npcs_) n.actor.tick();
         updateCamera();
         return;
     }
 
-    if (party_.team.size() > 1 && in.partnerP && talkNpc_ < 0 && !editor_) {  // Tab: next team member
+    if (party_.team.size() > 1 && party_.partnersOut && in.partnerP && talkNpc_ < 0 && !editor_) {  // Tab: next team member
         party_.setActive((party_.active + 1) % int(party_.team.size()));
         reloadPartner();
         status_ = party_.partnerName + " is your partner now";
@@ -515,6 +591,7 @@ void Field::update(const Input& in) {
         player_.move = Move::Idle;
     }
     updatePartner(speed);
+    for (auto& f : followers_) f.tick();
     for (auto& a : anims_)
         if (a.pieces.size() > 1 && ++a.timer >= a.delay) { a.timer = 0; a.cur = (a.cur + 1) % a.pieces.size(); }
     player_.tick();
@@ -563,7 +640,7 @@ void Field::update(const Input& in) {
                 if (story_ && story_->exitBlocked(stageId(), e.target, msg)) {
                     player_.x = prevX;  // step back out of the exit zone
                     player_.y = prevY;
-                    story_->say("", {msg});
+                    story_->sayRef(msg, "", msg);  // a message ref (dmg200:8:1) or our own text
                     break;
                 }
                 pendingExit_ = e;
@@ -706,14 +783,35 @@ void Field::render() {
 
     // painter's order by feet Y
     struct Item { float y; int kind; size_t idx; };
-    std::vector<Item> order{{player_.y, 0, 0}, {partner_.y, 1, 0}};
+    std::vector<Item> order{{player_.y, 0, 0}};
+    if (partnersVisible()) {
+        order.push_back({partner_.y, 1, 0});
+        for (size_t i = 0; i < followers_.size(); ++i) order.push_back({followers_[i].y, 3, i});
+    }
     for (size_t i = 0; i < npcs_.size(); ++i)
         if (!npcs_[i].defeated) order.push_back({npcs_[i].actor.y, 2, i});
     std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.y < b.y; });
     for (const auto& o : order) {
         if (o.kind == 0) player_.draw(camX_, camY_);
-        else if (o.kind == 1) partner_.draw(camX_, camY_);
-        else {
+        else if (o.kind == 1 || o.kind == 3) {
+            const Actor& a = o.kind == 1 ? partner_ : followers_[o.idx];
+            const int i = o.kind == 1 ? 0 : int(o.idx) + 1;  // download order
+            if (beamT_ < 0) { a.draw(camX_, camY_); continue; }
+            const int t = beamT_ - i * kBeamEach;  // this Digimon's beam time
+            if (t < 0) continue;
+            const float sx = a.x - camX_, sy = a.y - camY_;
+            const float in = std::min(1.f, float(t) / 14.f), out = t > 34 ? std::max(0.f, 1.f - float(t - 34) / 16.f) : 1.f;
+            const float col = in * out;
+            if (col > 0.f) {  // the data beam: a translucent blue column with bright scan lines
+                gfx::fillRect(sx - 9, sy - 44, 18, 46, rgba(80, 170, 255, uint8_t(110 * col)));
+                for (int k = 0; k < 6; ++k) {
+                    const float ly = sy - 44 + float((k * 8 + t * 2) % 46);
+                    gfx::fillRect(sx - 9, ly, 18, 1, rgba(200, 240, 255, uint8_t(200 * col)));
+                }
+                gfx::drawGlow(sx, sy - 2, 16, rgba(120, 200, 255, uint8_t(120 * col)));
+            }
+            if (t >= 18) a.draw(camX_, camY_, 1.f, 0xffffffffu, t < 30 ? 1.f - float(t - 18) / 12.f : 0.f);
+        } else {
             const auto& n = npcs_[o.idx];
             float scale = n.def.kind == NpcKind::Boss ? 1.35f : 1.f;
             n.actor.draw(camX_, camY_, scale);
@@ -758,7 +856,7 @@ void Field::renderHud(int ww, int wh) {
 
     if (hud_ && !cine && !dev_) {
         gfx::drawText(10, wh - 12,
-                      party_.team.size() > 1 ? "Move: WASD/Arrows  Run: Shift  Talk: Space  Partner: Tab  Menu: Esc  HUD: F1"
+                      party_.team.size() > 1 && party_.partnersOut ? "Move: WASD/Arrows  Run: Shift  Talk: Space  Partner: Tab  Menu: Esc  HUD: F1"
                                              : "Move: WASD/Arrows  Run: Shift  Talk: Space  Menu: Esc  HUD: F1",
                       0xffb0e0ffu);
     }
