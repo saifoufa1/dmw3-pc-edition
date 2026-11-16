@@ -29,7 +29,7 @@ it: docs/FORMATS.md "Area link table", "FIELDSTG.PRO tables", "File ids", "Field
   `data/file_ids.cfg` (names only, committed); `data/npcs/S###.npc` + `data/doors/S###.door` are generated from the
   player's own game data by `build.bat` (git-ignored, never pushed). dw3check checks every warp target exists.
 - Keys (`c594337`): U added to `confirm` (win32_main.cpp `poll`), Backspace = back in the app.cpp menus, hint texts.
-- Field (`FIELD`): NPCs only from data/npcs (story actors bind to original slots: `actor ... slot N [at X Y DIR]`),
+- Field (`83e0eaf`): NPCs only from data/npcs (story actors bind to original slots: `actor ... slot N [at X Y DIR]`),
   counter fronts depth-sorted (clerks behind the counter), doors from data/doors via the trigger zones, the
   original door marker (FIELDCOM pieces 35-38, `Field::loadDoorMark`), U/Enter uses a door (`Field::playerDoor`,
   never by walking), door sequence: door panel opens -> tile wipe -> area card (band = city, box = area) -> scene;
@@ -42,8 +42,8 @@ it: docs/FORMATS.md "Area link table", "FIELDSTG.PRO tables", "File ids", "Field
 - Marker frame timing is a guess; beam/port effects are ours (originals: FIELDCOM group 1 beams, not wired).
 - Stage drawing (lights, blinking screens, missing pieces) belongs to gfx-round2; see FORMATS.md "Scene objects".
 
-**Next step:** remaining round-2 screenshots (port on the S225 pads, each lobby door both ways, the Genji battle),
-in src/game/field.cpp nothing is pending; then the final report to the coordinator.
+**Next step:** round 2 is done (screenshots 01-15 + door_test.txt checked); wait for the owner's re-test.
+Ideas: decode the marker timing in FIELDSTG; make S235 walkable (TMPK variant).
 
 ### Graphics/controls work — on `gfx-round2`
 1. **Fit any screen:** resizable window, borderless fullscreen, and Fit / Stretch / Integer scale modes; wide screens show more of the scene. Saved in options.cfg.
