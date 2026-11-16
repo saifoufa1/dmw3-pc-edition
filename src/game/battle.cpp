@@ -57,10 +57,17 @@ struct EnemyModelDef {
     const char* model;
     const char* effect;  // projectile effect model
     float effectScale;
+    // Champion the enemy digivolves to below half HP (nullptr = none).
+    const char* evoModel = nullptr;
+    const char* evoName = nullptr;
+    const char* evoEffect = nullptr;
+    float evoEffectScale = 0;
 };
 const EnemyModelDef kEnemyModels[] = {
-    {"P171BAGM", "M003AGUM:black", "EFFECT/MEFT0328", 0.0055f},  // Black Agumon
-    {"P167SAGM", "M003AGUM:blue", "EFFECT/MEFT0328", 0.0055f},   // Blue Agumon
+    {"P171BAGM", "M003AGUM:black", "EFFECT/MEFT0328", 0.0055f,  // Black Agumon -> BlackGreymon
+     "M005GREY:black", "BlackGreymon", "EFFECT/MEFT0331", 0.014f},
+    {"P167SAGM", "M003AGUM:blue", "EFFECT/MEFT0328", 0.0055f,   // Blue Agumon -> Greymon (blue)
+     "M005GREY:blue", "Greymon (Blue)", "EFFECT/MEFT0331", 0.014f},
     {"P006AGUM", "M003AGUM", "EFFECT/MEFT0328", 0.0055f},        // Agumon
 };
 
@@ -137,6 +144,8 @@ bool Battle::start(const BattleRequest& req, const Texture* backdrop, float bgX,
     foe_.aiTimer = 50;
     foeEffect_ = nullptr;
     foeEffectScale_ = 0;
+    foeEvoModel_ = foeEvoName_ = foeEvoEffect_ = nullptr;
+    foeEvolved_ = false;
     for (const EnemyModelDef& d : kEnemyModels) {
         if (req.enemySprite != d.sprite) continue;
         foe_.model = models_.get(d.model);
@@ -147,6 +156,10 @@ bool Battle::start(const BattleRequest& req, const Texture* backdrop, float bgX,
         foe_.yaw = yawFor(-1, -0.3f);
         foeEffect_ = d.effect;
         foeEffectScale_ = d.effectScale * foe_.heightPx / kRookieHeightPx;
+        foeEvoModel_ = d.evoModel;
+        foeEvoName_ = d.evoName;
+        foeEvoEffect_ = d.evoEffect;
+        foeEvoEffectScale_ = d.evoEffectScale;
         setClip(foe_, kClipIdle, 0.6f, true);
         break;
     }
@@ -408,6 +421,8 @@ void Battle::startEvoSeq(int to) {
     seq_.len = seq_.up ? 200 : 110;
     seq_.fromH = me_.heightPx;
     seq_.toH = kRookieHeightPx * evoStage(to).scale;
+    seq_.fromName = formNameOf(seq_.from);
+    seq_.toName = formNameOf(to);
     me_.act = -1;
     me_.guarding = false;
     me_.stun = 0;
@@ -418,15 +433,54 @@ void Battle::startEvoSeq(int to) {
     moveNameT_ = 0;
 }
 
+// The enemy digivolves once, the first time its HP falls below half.
+void Battle::startFoeEvo() {
+    foeEvolved_ = true;
+    seq_ = {};
+    seq_.active = true;
+    seq_.foe = true;
+    seq_.up = true;
+    seq_.len = 200;
+    seq_.fromH = foe_.heightPx;
+    seq_.toH = kRookieHeightPx * evoStage(1).scale * (foe_.boss ? 1.3f : 1.f);
+    seq_.fromName = foe_.name;
+    seq_.toName = foeEvoName_;
+    foe_.act = -1;
+    foe_.dashTimer = 0;
+    foe_.stun = 0;
+    foe_.kbx = foe_.kby = 0;
+    me_.act = -1;
+    me_.guarding = false;
+    shots_.clear();
+}
+
+void Battle::applyFoeEvo() {
+    auto m = models_.get(foeEvoModel_);
+    if (!m) return;
+    foe_.model = m;
+    foe_.name = foeEvoName_;
+    foe_.clip = -1;
+    // Stronger and partly healed, like the partner's own digivolution.
+    const float bonus = foe_.maxHp * 0.5f;
+    foe_.maxHp += bonus;
+    foe_.hp = std::min(foe_.maxHp, foe_.hp + bonus);
+    foe_.power *= 1.35f;
+    foe_.scale = seq_.toH / 35.f;
+    foeEffect_ = foeEvoEffect_;
+    foeEffectScale_ = foeEvoEffectScale_;
+    setClip(foe_, kClipIdle, 0.6f, true);
+}
+
 void Battle::updateEvoSeq() {
     EvoSeq& s = seq_;
-    Fighter& f = me_;
+    Fighter& f = s.foe ? foe_ : me_;
+    const Fighter& other = s.foe ? me_ : foe_;
     ++s.t;
     const float t = float(s.t);
     const float A = s.up ? 60.f : 24.f;   // charge ends
     const float B = s.up ? 110.f : 54.f;  // white silhouette ends -> flash
     const float C = s.up ? 150.f : 84.f;  // reveal ends
-    const float toFoe = yawFor(foe_.a.x - f.a.x, foe_.a.y - f.a.y);
+    const float toFoe = yawFor(other.a.x - f.a.x, other.a.y - f.a.y);
 
     if (t < A) {  // gathering power: glow, rising sparks, turning white
         darken_ = std::min(s.up ? 0.6f : 0.35f, darken_ + 0.02f);
@@ -445,8 +499,11 @@ void Battle::updateEvoSeq() {
         const float k = smooth(A + 5.f, B - 5.f, t);
         if (!s.swapped && t >= (A + B) * 0.5f) {
             s.swapped = true;
-            setEvo(s.to);  // new model, new size, new attacks
-            if (!s.up) me_.dv = 0;
+            if (s.foe) applyFoeEvo();
+            else {
+                setEvo(s.to);  // new model, new size, new attacks
+                if (!s.up) me_.dv = 0;
+            }
         }
         f.heightPx = s.fromH + (s.toH - s.fromH) * k;
         if (s.t % 3 == 0) burst(f.cx(), f.cy(), rgba(255, 255, 255), 2, 2.5f);
@@ -471,7 +528,7 @@ void Battle::updateEvoSeq() {
     if (s.t >= s.len) {
         s = {};
         darken_ = 0;
-        if (me_.model) setClip(me_, kClipIdle, 0.6f, true);
+        if (f.model) setClip(f, kClipIdle, 0.6f, true);
     }
 }
 
@@ -657,6 +714,7 @@ void Battle::update(const Input& in) {
         } else if (phase_ == Phase::Fight) {
             updatePlayer(in);
             updateEnemy();
+            if (foeEvoModel_ && !foeEvolved_ && foe_.hp > 0 && foe_.hp < foe_.maxHp * 0.5f && !seq_.active) startFoeEvo();
             if (foe_.hp <= 0 || me_.hp <= 0) {
                 won_ = foe_.hp <= 0;
                 phase_ = Phase::Ending;
@@ -719,7 +777,7 @@ void Battle::drawFighter(Fighter& f, float camX, float camY) {
         v.yaw = f.yaw;
         v.tint = (tint & 0x00ffffffu) | (uint32_t(255 * f.deathFade) << 24);
         v.flash = f.flash > 0 ? f.flash / 8.f : 0.f;
-        if (isMe && seq_.active) {
+        if (seq_.active && seq_.foe != isMe) {
             v.flash = seq_.flash;
             v.silhouette = seq_.silhouette;
             if (v.silhouette) v.tint = 0xffffffffu;
@@ -748,13 +806,14 @@ void Battle::render() {
     }
     if (darken_ > 0) gfx::fillRect(0, 0, kScreenW, kScreenH, rgba(0, 0, 8, uint8_t(255 * darken_)));
 
-    // digivolution light pillar behind the partner
+    // digivolution light pillar behind whoever digivolves
     if (seq_.active) {
+        const Fighter& sf = seq_.foe ? foe_ : me_;
         const float B = seq_.up ? 110.f : 54.f;
         const float k = std::min(smooth(0, 30, float(seq_.t)), 1.f - smooth(B, B + 50, float(seq_.t)));
         const uint32_t c = seq_.up ? rgba(255, 210, 90, uint8_t(70 * k)) : rgba(150, 190, 255, uint8_t(60 * k));
         for (int i = 0; i < 12; ++i)
-            gfx::drawGlow(me_.a.x - camX, me_.a.y - camY - i * 20.f, 22.f + me_.heightPx * 0.25f + 3.f * std::sin(ticks_ * 0.3f + i), c);
+            gfx::drawGlow(sf.a.x - camX, sf.a.y - camY - i * 20.f, 22.f + sf.heightPx * 0.25f + 3.f * std::sin(ticks_ * 0.3f + i), c);
     }
 
     Fighter* order[2] = {&me_, &foe_};
@@ -900,12 +959,12 @@ void Battle::renderHud(int ww, int wh) {
         const int B = seq_.up ? 110 : 54;
         gfx::toWindow(160, 64, x, y);
         if (seq_.t > 12 && seq_.t < B) {
-            std::snprintf(buf, sizeof buf, seq_.up ? "%s digivolve to..." : "%s de-digivolve to...", formNameOf(seq_.from).c_str());
+            std::snprintf(buf, sizeof buf, seq_.up ? "%s digivolve to..." : "%s de-digivolve to...", seq_.fromName.c_str());
             gfx::drawTextCentered(x, y, buf, seq_.up ? 0xff60e0ffu : 0xffffd0a0u);
         } else if (seq_.t >= B) {
-            std::snprintf(buf, sizeof buf, "%s!", formNameOf(seq_.to).c_str());
-            gfx::drawTextCentered(x, y, buf, seq_.up ? 0xff40ffffu : 0xffffffffu);
-            if (seq_.up) {
+            std::snprintf(buf, sizeof buf, "%s!", seq_.toName.c_str());
+            gfx::drawTextCentered(x, y, buf, seq_.foe ? 0xff6060ffu : seq_.up ? 0xff40ffffu : 0xffffffffu);
+            if (seq_.up && !seq_.foe) {
                 gfx::toWindow(160, 74, x, y);
                 const FormDef* f = form();
                 std::snprintf(buf, sizeof buf, "New moves: %s / %s / %s", f->atk[0].name, f->atk[1].name, f->atk[2].name);

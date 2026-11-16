@@ -115,11 +115,11 @@ void Actor::draw(float camX, float camY, float scale, uint32_t tint, float flash
 
 const EvoStage& evoStage(int level) {
     static const EvoStage stages[kMaxEvo + 1] = {
-        // Sizes: a Rookie is 60% of its Champion (1 / 1.67); Ultimate and Mega grow again.
+        // Sizes: a Champion is twice its Rookie (owner: Greymon clearly bigger); Ultimate and Mega grow again.
         {"Rookie", 1.00f, 1.0f, 0, 0xffffffffu},
-        {"Champion", 1.67f, 1.7f, 60, rgba(255, 220, 190)},
-        {"Ultimate", 2.10f, 2.5f, 120, rgba(255, 200, 150)},
-        {"Mega", 2.50f, 3.6f, 200, rgba(255, 235, 140)},
+        {"Champion", 2.00f, 1.7f, 60, rgba(255, 220, 190)},
+        {"Ultimate", 2.40f, 2.5f, 120, rgba(255, 200, 150)},
+        {"Mega", 2.80f, 3.6f, 200, rgba(255, 235, 140)},
     };
     return stages[std::clamp(level, 0, kMaxEvo)];
 }

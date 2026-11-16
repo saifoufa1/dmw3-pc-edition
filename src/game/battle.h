@@ -105,12 +105,16 @@ private:
         bool swapped = false;
         float flash = 0;          // white overlay on the partner
         bool silhouette = false;  // pure white shape (mid-transformation)
+        bool foe = false;         // the enemy is the one digivolving
+        std::string fromName, toName;
     };
 
     void updatePlayer(const Input& in);
     void updateEnemy();
     void updateEvoSeq();
     void startEvoSeq(int to);
+    void startFoeEvo();
+    void applyFoeEvo();
     void startPlayerAttack(int slot);
     void resolvePlayerAttack();
     void startAttack(Fighter& f, int slot, int duration);
@@ -140,6 +144,12 @@ private:
     std::vector<Spark> sparks_;
     std::vector<Popup> popups_;
     EvoSeq seq_;
+    // Enemy digivolution (e.g. Black Agumon -> BlackGreymon below half HP).
+    const char* foeEvoModel_ = nullptr;
+    const char* foeEvoName_ = nullptr;
+    const char* foeEvoEffect_ = nullptr;
+    float foeEvoEffectScale_ = 0;
+    bool foeEvolved_ = false;
     float darken_ = 0;  // extra screen dim during digivolution
     enum class Phase { Intro, Fight, Ending } phase_ = Phase::Intro;
     int phaseTimer_ = 0, shake_ = 0, screenFlash_ = 0;
